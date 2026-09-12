@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import bot
 
@@ -13,46 +14,29 @@ HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "8080"))
 
 MAX_BODY = 12 * 1024 * 1024
-AUTH_MAX_AGE = 24 * 60 * 60
 MAX_MESSAGE = 12000
 MAX_IMAGE_BASE64 = 10 * 1024 * 1024
+AUTH_MAX_AGE = 24 * 60 * 60
 
-
-# =========================================================
-# JSON
-# =========================================================
 
 def send_json(handler, status, data):
     body = json.dumps(
         data,
         ensure_ascii=False,
-        separators=(",", ":")
+        separators=(",", ":"),
     ).encode("utf-8")
 
     handler.send_response(status)
     handler.send_header(
         "Content-Type",
-        "application/json; charset=utf-8"
+        "application/json; charset=utf-8",
     )
-    handler.send_header(
-        "Content-Length",
-        str(len(body))
-    )
-    handler.send_header(
-        "Access-Control-Allow-Origin",
-        "*"
-    )
-    handler.send_header(
-        "Access-Control-Allow-Headers",
-        "Content-Type, X-Telegram-Init-Data"
-    )
-    handler.send_header(
-        "Access-Control-Allow-Methods",
-        "GET, POST, OPTIONS"
-    )
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
 
-    handler.wfile.write(body)
+    if status != 204:
+        handler.wfile.write(body)
 
 
 def read_json(handler):
@@ -72,27 +56,23 @@ def read_json(handler):
     raw = handler.rfile.read(length)
 
     try:
-        return json.loads(
-            raw.decode("utf-8")
-        )
+        data = json.loads(raw.decode("utf-8"))
     except Exception:
         raise ValueError("Некорректный JSON.")
 
+    if not isinstance(data, dict):
+        raise ValueError("JSON должен быть объектом.")
 
-# =========================================================
-# TELEGRAM AUTH
-# =========================================================
+    return data
+
 
 def validate_init_data(init_data):
     if not init_data:
         raise ValueError(
-            "Telegram initData отсутствует."
+            "Открой Bulba AI через Telegram."
         )
 
-    token = os.getenv(
-        "BOT_TOKEN",
-        ""
-    ).strip()
+    token = os.getenv("BOT_TOKEN", "").strip()
 
     if not token:
         raise RuntimeError(
@@ -101,27 +81,27 @@ def validate_init_data(init_data):
 
     parsed = urllib.parse.parse_qs(
         init_data,
-        keep_blank_values=True
+        keep_blank_values=True,
     )
 
     received_hash = parsed.get(
         "hash",
-        [None]
+        [None],
     )[0]
 
     if not received_hash:
         raise ValueError(
-            "В initData отсутствует hash."
+            "В Telegram initData отсутствует hash."
         )
 
     auth_date_raw = parsed.get(
         "auth_date",
-        [None]
+        [None],
     )[0]
 
     if not auth_date_raw:
         raise ValueError(
-            "В initData отсутствует auth_date."
+            "В Telegram initData отсутствует auth_date."
         )
 
     try:
@@ -131,22 +111,20 @@ def validate_init_data(init_data):
             "Некорректный auth_date."
         )
 
-    if abs(
-        int(time.time()) - auth_date
-    ) > AUTH_MAX_AGE:
+    if abs(int(time.time()) - auth_date) > AUTH_MAX_AGE:
         raise ValueError(
-            "Telegram initData устарел."
+            "Сессия Telegram устарела. "
+            "Перезапусти Mini App."
         )
 
     pairs = []
 
-    for key in sorted(parsed.keys()):
+    for key in sorted(parsed):
         if key == "hash":
             continue
 
-        value = parsed[key][0]
         pairs.append(
-            f"{key}={value}"
+            f"{key}={parsed[key][0]}"
         )
 
     data_check_string = "\n".join(pairs)
@@ -154,18 +132,18 @@ def validate_init_data(init_data):
     secret_key = hmac.new(
         b"WebAppData",
         token.encode("utf-8"),
-        hashlib.sha256
+        hashlib.sha256,
     ).digest()
 
     calculated_hash = hmac.new(
         secret_key,
         data_check_string.encode("utf-8"),
-        hashlib.sha256
+        hashlib.sha256,
     ).hexdigest()
 
     if not hmac.compare_digest(
         calculated_hash,
-        received_hash
+        received_hash,
     ):
         raise ValueError(
             "Неверная подпись Telegram."
@@ -173,7 +151,7 @@ def validate_init_data(init_data):
 
     user_raw = parsed.get(
         "user",
-        [None]
+        [None],
     )[0]
 
     if not user_raw:
@@ -199,16 +177,12 @@ def validate_init_data(init_data):
 def get_user_from_request(handler):
     init_data = handler.headers.get(
         "X-Telegram-Init-Data",
-        ""
+        "",
     ).strip()
 
-    tg_user = validate_init_data(
-        init_data
-    )
+    tg_user = validate_init_data(init_data)
 
-    uid = str(
-        tg_user["id"]
-    )
+    uid = str(tg_user["id"])
 
     user = bot.get_user(uid)
 
@@ -218,40 +192,37 @@ def get_user_from_request(handler):
         "id": tg_user.get("id"),
         "first_name": tg_user.get(
             "first_name",
-            ""
+            "",
         ),
         "last_name": tg_user.get(
             "last_name",
-            ""
+            "",
         ),
         "username": tg_user.get(
             "username",
-            ""
+            "",
         ),
         "language_code": tg_user.get(
             "language_code",
-            ""
+            "",
         ),
         "photo_url": tg_user.get(
             "photo_url",
-            ""
+            "",
         ),
     }
 
     return user
 
 
-# =========================================================
-# ACCESS
-# =========================================================
-
 def require_access(user):
-    required = os.getenv(
-        "LICENSE_REQUIRED",
-        "0"
-    ).strip() == "1"
-
-    if not required:
+    if (
+        os.getenv(
+            "LICENSE_REQUIRED",
+            "0",
+        ).strip()
+        != "1"
+    ):
         return True
 
     uid = user.get("_user_id")
@@ -273,45 +244,44 @@ def require_access(user):
         return False
 
 
-# =========================================================
-# MODELS
-# =========================================================
-
-def get_models():
+def available_models():
     result = []
 
     for item in bot.get_models():
         if not isinstance(item, dict):
             continue
 
-        model_id = item.get("id")
+        mid = item.get("id")
 
-        if not model_id:
+        if not mid:
             continue
 
-        if bot.is_bad_model(model_id):
+        if bot.is_bad_model(mid):
             continue
 
-        result.append({
-            "id": model_id,
-            "name": model_id
-        })
+        result.append(
+            {
+                "id": str(mid),
+                "name": str(mid),
+            }
+        )
 
     return result
 
 
 def validate_model(model):
-    if not model:
-        return "auto"
-
-    model = str(model).strip()
+    model = (
+        "auto"
+        if model is None
+        else str(model).strip()
+    )
 
     if model == "auto":
         return "auto"
 
     available = {
         x["id"]
-        for x in get_models()
+        for x in available_models()
     }
 
     if model not in available:
@@ -322,171 +292,242 @@ def validate_model(model):
     return model
 
 
-# =========================================================
-# HISTORY
-# =========================================================
+def chat_title(chat_id, chat):
+    title = str(
+        chat.get(
+            "title",
+            "",
+        )
+    ).strip()
 
-def make_history(user, chat, current_content):
-    messages = []
+    if title:
+        return title
 
-    system_prompt = bot.style_system(
-        user
-    )
+    last_prompt = str(
+        chat.get(
+            "last_prompt",
+            "",
+        )
+    ).strip()
 
-    if system_prompt:
-        messages.append({
-            "role": "system",
-            "content": system_prompt
-        })
-
-    history = chat.get(
-        "history",
-        []
-    )
-
-    for item in history[
-        -bot.MAX_HISTORY:
-    ]:
-        role = item.get(
-            "role",
-            "user"
+    if last_prompt:
+        clean = " ".join(
+            last_prompt.split()
         )
 
-        content = item.get(
-            "content",
-            ""
+        return clean[:42] + (
+            "…" if len(clean) > 42 else ""
         )
 
-        if not content:
-            continue
+    if str(chat_id) != "main":
+        return "Новый чат"
 
-        if role not in (
-            "user",
-            "assistant",
-            "system"
-        ):
-            continue
+    return "Главный чат"
 
-        messages.append({
-            "role": role,
-            "content": content
-        })
-
-    messages.append({
-        "role": "user",
-        "content": current_content
-    })
-
-    return messages
-
-
-# =========================================================
-# STATE
-# =========================================================
 
 def frontend_state(user):
     chats = []
 
     for chat_id, chat in user.get(
         "chats",
-        {}
+        {},
     ).items():
+
+        if not isinstance(chat, dict):
+            continue
 
         messages = []
 
         for item in chat.get(
             "history",
-            []
+            [],
         ):
-            if not isinstance(
-                item,
-                dict
+
+            if not isinstance(item, dict):
+                continue
+
+            role = item.get(
+                "role",
+                "user",
+            )
+
+            if role not in (
+                "user",
+                "assistant",
             ):
                 continue
 
-            messages.append({
-                "role": item.get(
-                    "role",
-                    "user"
-                ),
-                "content": str(
-                    item.get(
-                        "content",
-                        ""
-                    )
-                )
-            })
-
-        chats.append({
-            "id": str(chat_id),
-            "title": str(
-                chat.get(
-                    "title",
-                    chat_id
-                )
-            ),
-            "messages": messages,
-            "requests": chat.get(
-                "requests",
-                0
-            ),
-            "created": chat.get(
-                "created",
-                0
+            messages.append(
+                {
+                    "role": role,
+                    "content": str(
+                        item.get(
+                            "content",
+                            "",
+                        )
+                    ),
+                }
             )
-        })
+
+        last_request = chat.get(
+            "last_request"
+        )
+
+        if isinstance(
+            last_request,
+            (int, float),
+        ):
+            last_request_value = int(
+                last_request
+            )
+        else:
+            last_request_value = 0
+
+        chats.append(
+            {
+                "id": str(chat_id),
+                "title": chat_title(
+                    chat_id,
+                    chat,
+                ),
+                "messages": messages,
+                "requests": int(
+                    chat.get(
+                        "requests",
+                        0,
+                    )
+                    or 0
+                ),
+                "created": int(
+                    chat.get(
+                        "created",
+                        0,
+                    )
+                    or 0
+                ),
+                "last_request":
+                    last_request_value,
+            }
+        )
+
+    chats.sort(
+        key=lambda x: (
+            x["last_request"],
+            x["created"],
+        ),
+        reverse=True,
+    )
 
     return {
         "model": user.get(
             "model",
-            "auto"
+            "auto",
         ),
         "style": user.get(
             "style",
-            "normal"
+            "normal",
         ),
         "active_chat": str(
             user.get(
                 "active_chat",
-                "main"
+                "main",
             )
         ),
         "chats": chats,
         "memory": user.get(
             "memory",
-            {}
+            {},
         ),
-        "requests": user.get(
-            "requests",
-            0
+        "requests": int(
+            user.get(
+                "requests",
+                0,
+            )
+            or 0
         ),
-        "errors": user.get(
-            "errors",
-            0
+        "errors": int(
+            user.get(
+                "errors",
+                0,
+            )
+            or 0
         ),
         "telegram_user": user.get(
             "_telegram_user",
-            {}
+            {},
         ),
         "version": getattr(
             bot,
             "BOT_VERSION",
-            "V15"
-        )
+            "V15",
+        ),
     }
 
 
-# =========================================================
-# CHAT
-# =========================================================
+def make_messages(
+    user,
+    chat,
+    current_content,
+):
+    messages = [
+        {
+            "role": "system",
+            "content": bot.style_system(
+                user
+            ),
+        }
+    ]
 
-def create_ai_content(text, image):
+    # Текущий запрос не добавляем
+    # в history до вызова API.
+    for item in chat.get(
+        "history",
+        [],
+    )[-bot.MAX_HISTORY:]:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        role = item.get("role")
+        content = item.get("content")
+
+        if (
+            role in (
+                "user",
+                "assistant",
+            )
+            and content
+        ):
+            messages.append(
+                {
+                    "role": role,
+                    "content": content,
+                }
+            )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": current_content,
+        }
+    )
+
+    return messages
+
+
+def make_image_content(
+    text,
+    image,
+):
     if not image:
         return text
 
     if not isinstance(
         image,
-        str
+        str,
     ):
         raise ValueError(
             "Некорректное изображение."
@@ -501,34 +542,136 @@ def create_ai_content(text, image):
         "data:image/"
     ):
         raise ValueError(
-            "Неподдерживаемый формат изображения."
+            "Поддерживаются только изображения."
         )
 
     return [
         {
             "type": "text",
-            "text": text or "Проанализируй изображение."
+            "text": (
+                text
+                or "Проанализируй изображение."
+            ),
         },
         {
             "type": "image_url",
             "image_url": {
                 "url": image
-            }
-        }
+            },
+        },
     ]
 
 
-def handle_chat(user, data):
+def create_chat(user):
+    chat_id = bot.new_chat(user)
+    bot.save_db()
+    return str(chat_id)
+
+
+def rename_chat(
+    user,
+    chat_id,
+    title,
+):
+    chat_id = str(chat_id)
+
+    if chat_id not in user["chats"]:
+        raise ValueError(
+            "Чат не найден."
+        )
+
+    title = " ".join(
+        str(title or "").split()
+    ).strip()
+
+    if not title:
+        raise ValueError(
+            "Название не может быть пустым."
+        )
+
+    if len(title) > 60:
+        title = (
+            title[:60].rstrip()
+            + "…"
+        )
+
+    user["chats"][chat_id][
+        "title"
+    ] = title
+
+    bot.save_db()
+
+
+def delete_chat(
+    user,
+    chat_id,
+):
+    chat_id = str(chat_id)
+
+    if chat_id not in user["chats"]:
+        raise ValueError(
+            "Чат не найден."
+        )
+
+    if len(user["chats"]) <= 1:
+        user["chats"] = {
+            "main": bot.default_chat()
+        }
+
+        user["active_chat"] = "main"
+
+    else:
+        del user["chats"][chat_id]
+
+        if (
+            user.get("active_chat")
+            == chat_id
+        ):
+            user["active_chat"] = next(
+                iter(user["chats"])
+            )
+
+    bot.save_db()
+
+
+def clear_chat(
+    user,
+    chat_id,
+):
+    chat_id = str(chat_id)
+
+    if chat_id not in user["chats"]:
+        raise ValueError(
+            "Чат не найден."
+        )
+
+    chat = user["chats"][chat_id]
+
+    chat["history"] = []
+    chat["last_prompt"] = None
+    chat["last_request"] = None
+
+    if chat_id == "main":
+        chat.pop(
+            "title",
+            None,
+        )
+
+    bot.save_db()
+
+
+def handle_chat(
+    user,
+    data,
+):
     text = str(
         data.get(
             "message",
-            ""
+            "",
         )
     ).strip()
 
-    image = data.get(
-        "image"
-    )
+    image = data.get("image")
 
     if not text and not image:
         raise ValueError(
@@ -540,374 +683,431 @@ def handle_chat(user, data):
             "Сообщение слишком длинное."
         )
 
-    if not bot.allowed_request(
-        user
-    ):
-        raise RuntimeError(
-            "Слишком много запросов. Попробуй немного позже."
+    requested_model = validate_model(
+        data.get(
+            "model",
+            user.get(
+                "model",
+                "auto",
+            ),
+        )
+    )
+
+    chat_id = str(
+        data.get(
+            "chat_id",
+            user.get(
+                "active_chat",
+                "main",
+            ),
+        )
+    )
+
+    if chat_id not in user["chats"]:
+        chat_id = str(
+            user.get(
+                "active_chat",
+                "main",
+            )
         )
 
-    requested_model = validate_model(
-        data.get("model")
-    )
+    if chat_id not in user["chats"]:
+        chat_id = "main"
 
-    if requested_model != "auto":
-        user["model"] = requested_model
+    user["active_chat"] = chat_id
 
+    if not bot.allowed_request(user):
+        raise ValueError(
+            "Слишком много запросов. "
+            "Подожди немного."
+        )
+
+    if not require_access(user):
+        raise PermissionError(
+            "Для использования Bulba AI "
+            "нужна активная лицензия."
+        )
+
+    vision = bool(image)
+
+    if requested_model == "auto":
+        model = bot.choose_model(
+            user,
+            vision=vision,
+        )
     else:
-        user["model"] = "auto"
+        model = bot.choose_model(
+            user,
+            vision=vision,
+            preferred=requested_model,
+        )
 
-    style = data.get(
-        "style"
-    )
-
-    if style in (
-        "normal",
-        "short",
-        "detailed"
-    ):
-        user["style"] = style
-
-    chat_id = data.get(
-        "chat_id"
-    )
-
-    if chat_id:
-        chat_id = str(chat_id)
-
-        if chat_id in user["chats"]:
-            user["active_chat"] = chat_id
-
-    chat = bot.get_chat(
-        user
-    )
-
-    content = create_ai_content(
+    content = make_image_content(
         text,
-        image
+        image,
     )
 
-    # Для истории сохраняем обычный текст.
-    history_text = text
+    chat = user["chats"][chat_id]
 
-    if image and not text:
-        history_text = "[Фото]"
-
-    history = chat.setdefault(
-        "history",
-        []
-    )
-
-    history.append({
-        "role": "user",
-        "content": history_text
-    })
-
-    history[:] = history[
-        -bot.MAX_HISTORY:
-    ]
-
-    messages = make_history(
+    messages = make_messages(
         user,
         chat,
-        content
+        content,
     )
-
-    # ВАЖНО:
-    # выбираем только одну модель.
-    # Это намного быстрее старого режима,
-    # где AI мог перебирать до 8 моделей.
-
-    candidates = bot.choose_model(
-        user,
-        vision=bool(image),
-        preferred=(
-            None
-            if requested_model == "auto"
-            else requested_model
-        )
-    )
-
-    if not candidates:
-        raise RuntimeError(
-            "Нет доступных AI-моделей."
-        )
-
-    ai_model = candidates[0]
 
     answer, error, status = bot.call_ai(
         messages,
-        ai_model
+        model,
     )
 
-    if not answer:
+    if error:
+        user["errors"] = int(
+            user.get(
+                "errors",
+                0,
+            )
+            or 0
+        ) + 1
+
+        bot.save_db()
+
         raise RuntimeError(
             error
-            or "AI не вернул ответ."
         )
 
     answer = str(
-        answer
+        answer or ""
     ).strip()
 
-    history.append({
-        "role": "assistant",
-        "content": answer
-    })
+    if not answer:
+        answer = "Пустой ответ от AI."
 
-    history[:] = history[
-        -bot.MAX_HISTORY:
-    ]
+    chat["history"].append(
+        {
+            "role": "user",
+            "content": (
+                text
+                if text
+                else "[Изображение]"
+            ),
+        }
+    )
+
+    chat["history"].append(
+        {
+            "role": "assistant",
+            "content": answer,
+        }
+    )
+
+    chat["history"] = chat[
+        "history"
+    ][-bot.MAX_HISTORY:]
 
     chat["last_prompt"] = (
-        text or "[Фото]"
+        text
+        if text
+        else "Изображение"
     )
 
     chat["last_request"] = int(
         time.time()
     )
 
-    chat["requests"] = (
+    chat["requests"] = int(
         chat.get(
             "requests",
-            0
-        ) + 1
-    )
+            0,
+        )
+        or 0
+    ) + 1
 
-    user["requests"] = (
+    user["requests"] = int(
         user.get(
             "requests",
-            0
-        ) + 1
-    )
-
-    bot.db["total_requests"] = (
-        bot.db.get(
-            "total_requests",
-            0
-        ) + 1
-    )
+            0,
+        )
+        or 0
+    ) + 1
 
     try:
         bot.consume_license_after_success(
             user
         )
-    except Exception as e:
-        print(
-            "License consume error:",
-            repr(e)
-        )
+    except TypeError:
+        try:
+            bot.consume_license_after_success(
+                user.get("_user_id")
+            )
+        except Exception:
+            pass
+    except Exception:
+        pass
 
     bot.save_db()
 
     return {
         "answer": answer,
-        "model": ai_model,
-        "state": frontend_state(
-            user
-        )
+        "model": model,
+        "state": frontend_state(user),
+        "status": status,
     }
 
 
-# =========================================================
-# HTTP HANDLER
-# =========================================================
+def serve_index(handler):
+    path = (
+        Path(__file__).resolve().parent
+        / "miniapp"
+        / "index.html"
+    )
 
-class MiniAppHandler(
-    BaseHTTPRequestHandler
-):
+    if not path.exists():
+        send_json(
+            handler,
+            404,
+            {
+                "error":
+                    "Mini App index.html не найден."
+            },
+        )
+        return
 
-    server_version = "BulbaMiniApp/1.0"
+    body = path.read_bytes()
+
+    handler.send_response(200)
+    handler.send_header(
+        "Content-Type",
+        "text/html; charset=utf-8",
+    )
+    handler.send_header(
+        "Cache-Control",
+        "no-store",
+    )
+    handler.send_header(
+        "Content-Length",
+        str(len(body)),
+    )
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+class Handler(BaseHTTPRequestHandler):
 
     def log_message(
         self,
-        fmt,
-        *args
+        format,
+        *args,
     ):
         print(
-            "[MINIAPP]",
-            fmt % args
-        )
-
-    def error(
-        self,
-        status,
-        message
-    ):
-        send_json(
-            self,
-            status,
-            {
-                "ok": False,
-                "error": str(message)
-            }
+            f"[MiniApp] {self.address_string()} "
+            f"- {format % args}"
         )
 
     def do_OPTIONS(self):
-        send_json(
-            self,
-            204,
-            {}
+        self.send_response(204)
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, X-Telegram-Init-Data",
         )
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, OPTIONS",
+        )
+        self.end_headers()
 
     def do_GET(self):
-
-        path = urllib.parse.urlparse(
-            self.path
-        ).path
-
-        # Health check
-        if path == "/health":
-            send_json(
-                self,
-                200,
-                {
-                    "ok": True,
-                    "service": "BulbaMaxAI",
-                    "version": getattr(
-                        bot,
-                        "BOT_VERSION",
-                        "V15"
-                    )
-                }
-            )
-            return
-
-        # Frontend
-        if path in (
-            "/",
-            "/index.html"
-        ):
-            self.serve_index()
-            return
-
         try:
-            user = get_user_from_request(
-                self
-            )
-        except Exception as e:
-            self.error(
-                401,
-                e
-            )
-            return
+            if self.path in (
+                "/",
+                "/index.html",
+            ):
+                serve_index(self)
+                return
 
-        if not require_access(
-            user
-        ):
-            self.error(
-                403,
-                "Доступ запрещён."
-            )
-            return
-
-        if path == "/api/state":
-            send_json(
-                self,
-                200,
-                {
-                    "ok": True,
-                    "state": frontend_state(
-                        user
-                    )
-                }
-            )
-            return
-
-        if path == "/api/models":
-            send_json(
-                self,
-                200,
-                {
-                    "ok": True,
-                    "models": get_models(),
-                    "selected": user.get(
-                        "model",
-                        "auto"
-                    )
-                }
-            )
-            return
-
-        self.error(
-            404,
-            "Endpoint не найден."
-        )
-
-    def do_POST(self):
-
-        try:
-            user = get_user_from_request(
-                self
-            )
-        except Exception as e:
-            self.error(
-                401,
-                e
-            )
-            return
-
-        if not require_access(
-            user
-        ):
-            self.error(
-                403,
-                "Доступ запрещён."
-            )
-            return
-
-        try:
-            data = read_json(
-                self
-            )
-
-            path = urllib.parse.urlparse(
-                self.path
-            ).path
-
-            if path == "/api/chat":
-                result = handle_chat(
-                    user,
-                    data
-                )
-
+            if self.path == "/health":
                 send_json(
                     self,
                     200,
                     {
                         "ok": True,
-                        **result
-                    }
+                        "version": getattr(
+                            bot,
+                            "BOT_VERSION",
+                            "V15",
+                        ),
+                    },
                 )
                 return
 
-            if path == "/api/chat/new":
-                result = bot.new_chat(
+            if self.path == "/api/state":
+                user = get_user_from_request(
+                    self
+                )
+
+                if not require_access(user):
+                    raise PermissionError(
+                        "Нет доступа."
+                    )
+
+                send_json(
+                    self,
+                    200,
+                    {
+                        "state":
+                            frontend_state(user)
+                    },
+                )
+                return
+
+            if self.path == "/api/models":
+                user = get_user_from_request(
+                    self
+                )
+
+                if not require_access(user):
+                    raise PermissionError(
+                        "Нет доступа."
+                    )
+
+                send_json(
+                    self,
+                    200,
+                    {
+                        "models":
+                            available_models()
+                    },
+                )
+                return
+
+            if self.path == "/api/stats":
+                user = get_user_from_request(
+                    self
+                )
+
+                if not require_access(user):
+                    raise PermissionError(
+                        "Нет доступа."
+                    )
+
+                send_json(
+                    self,
+                    200,
+                    {
+                        "stats": {
+                            "requests":
+                                int(
+                                    user.get(
+                                        "requests",
+                                        0,
+                                    )
+                                    or 0
+                                ),
+                            "errors":
+                                int(
+                                    user.get(
+                                        "errors",
+                                        0,
+                                    )
+                                    or 0
+                                ),
+                            "chats":
+                                len(
+                                    user.get(
+                                        "chats",
+                                        {},
+                                    )
+                                ),
+                            "version":
+                                getattr(
+                                    bot,
+                                    "BOT_VERSION",
+                                    "V15",
+                                ),
+                        }
+                    },
+                )
+                return
+
+            send_json(
+                self,
+                404,
+                {
+                    "error":
+                        "Страница не найдена."
+                },
+            )
+
+        except PermissionError as e:
+            send_json(
+                self,
+                403,
+                {"error": str(e)},
+            )
+
+        except Exception as e:
+            print(
+                "[MiniApp GET ERROR]",
+                repr(e),
+            )
+
+            send_json(
+                self,
+                500,
+                {
+                    "error":
+                        str(e)
+                        or "Ошибка сервера."
+                },
+            )
+
+    def do_POST(self):
+        try:
+            user = get_user_from_request(
+                self
+            )
+
+            if not require_access(user):
+                raise PermissionError(
+                    "Нет доступа."
+                )
+
+            data = read_json(self)
+
+            if self.path == "/api/chat":
+                result = handle_chat(
+                    user,
+                    data,
+                )
+
+                send_json(
+                    self,
+                    200,
+                    result,
+                )
+                return
+
+            if self.path == "/api/chat/new":
+                chat_id = create_chat(
                     user
                 )
 
-                bot.save_db()
-
                 send_json(
                     self,
                     200,
                     {
-                        "ok": True,
-                        "chat_id": str(
-                            result
-                        ),
-                        "state": frontend_state(
-                            user
-                        )
-                    }
+                        "state":
+                            frontend_state(user),
+                        "chat_id":
+                            chat_id,
+                    },
                 )
                 return
 
-            if path == "/api/chat/select":
+            if self.path == "/api/chat/select":
                 chat_id = str(
                     data.get(
                         "chat_id",
-                        ""
+                        "",
                     )
                 )
 
@@ -928,244 +1128,242 @@ class MiniAppHandler(
                     self,
                     200,
                     {
-                        "ok": True,
-                        "state": frontend_state(
-                            user
-                        )
-                    }
+                        "state":
+                            frontend_state(user)
+                    },
                 )
                 return
 
-            if path == "/api/settings":
-                model = data.get(
-                    "model"
+            if self.path == "/api/chat/rename":
+                rename_chat(
+                    user,
+                    data.get(
+                        "chat_id"
+                    ),
+                    data.get(
+                        "title"
+                    ),
                 )
 
-                if model is not None:
-                    model = validate_model(
-                        model
+                send_json(
+                    self,
+                    200,
+                    {
+                        "state":
+                            frontend_state(user)
+                    },
+                )
+                return
+
+            if self.path == "/api/chat/delete":
+                delete_chat(
+                    user,
+                    data.get(
+                        "chat_id"
+                    ),
+                )
+
+                send_json(
+                    self,
+                    200,
+                    {
+                        "state":
+                            frontend_state(user)
+                    },
+                )
+                return
+
+            if self.path == "/api/chat/clear":
+                clear_chat(
+                    user,
+                    data.get(
+                        "chat_id",
+                        user.get(
+                            "active_chat",
+                            "main",
+                        ),
+                    ),
+                )
+
+                send_json(
+                    self,
+                    200,
+                    {
+                        "state":
+                            frontend_state(user)
+                    },
+                )
+                return
+
+            if self.path == "/api/settings":
+                changed = False
+
+                if "model" in data:
+                    user["model"] = validate_model(
+                        data["model"]
                     )
-                    user[
-                        "model"
-                    ] = model
+                    changed = True
 
-                style = data.get(
-                    "style"
-                )
+                if "style" in data:
+                    style = str(
+                        data["style"]
+                    ).strip()
 
-                if style is not None:
                     if style not in (
                         "normal",
                         "short",
-                        "detailed"
+                        "detailed",
                     ):
                         raise ValueError(
-                            "Неизвестный стиль."
+                            "Некорректный стиль."
                         )
 
-                    user[
-                        "style"
-                    ] = style
+                    user["style"] = style
+                    changed = True
 
-                bot.save_db()
+                if changed:
+                    bot.save_db()
 
                 send_json(
                     self,
                     200,
                     {
-                        "ok": True,
                         "settings": {
-                            "model": user.get(
-                                "model",
-                                "auto"
-                            ),
-                            "style": user.get(
-                                "style",
-                                "normal"
-                            )
+                            "model":
+                                user.get(
+                                    "model",
+                                    "auto",
+                                ),
+                            "style":
+                                user.get(
+                                    "style",
+                                    "normal",
+                                ),
                         }
-                    }
+                    },
                 )
                 return
 
-            if path == "/api/memory":
+            if self.path == "/api/memory":
                 action = str(
                     data.get(
                         "action",
-                        "get"
+                        "",
                     )
-                ).lower()
+                ).strip()
 
                 if action == "clear":
-                    user[
-                        "memory"
-                    ] = {}
-
-                elif action == "set":
-                    memory = data.get(
-                        "memory",
-                        {}
-                    )
-
-                    if not isinstance(
-                        memory,
-                        dict
-                    ):
-                        raise ValueError(
-                            "memory должен быть объектом."
-                        )
-
-                    user[
-                        "memory"
-                    ] = memory
-
-                bot.save_db()
+                    user["memory"] = {}
+                    bot.save_db()
 
                 send_json(
                     self,
                     200,
                     {
-                        "ok": True,
-                        "memory": user.get(
-                            "memory",
-                            {}
-                        )
-                    }
+                        "memory":
+                            user.get(
+                                "memory",
+                                {},
+                            )
+                    },
                 )
                 return
 
-            self.error(
+            if self.path == "/api/stats":
+                send_json(
+                    self,
+                    200,
+                    {
+                        "stats": {
+                            "requests":
+                                int(
+                                    user.get(
+                                        "requests",
+                                        0,
+                                    )
+                                    or 0
+                                ),
+                            "errors":
+                                int(
+                                    user.get(
+                                        "errors",
+                                        0,
+                                    )
+                                    or 0
+                                ),
+                            "chats":
+                                len(
+                                    user.get(
+                                        "chats",
+                                        {},
+                                    )
+                                ),
+                            "version":
+                                getattr(
+                                    bot,
+                                    "BOT_VERSION",
+                                    "V15",
+                                ),
+                        }
+                    },
+                )
+                return
+
+            send_json(
+                self,
                 404,
-                "Endpoint не найден."
+                {
+                    "error":
+                        "API endpoint не найден."
+                },
+            )
+
+        except PermissionError as e:
+            send_json(
+                self,
+                403,
+                {"error": str(e)},
+            )
+
+        except ValueError as e:
+            send_json(
+                self,
+                400,
+                {"error": str(e)},
             )
 
         except Exception as e:
-
             print(
-                "Mini App error:",
-                repr(e)
+                "[MiniApp POST ERROR]",
+                repr(e),
             )
 
-            try:
-                user["errors"] = (
-                    user.get(
-                        "errors",
-                        0
-                    ) + 1
-                )
-
-                bot.db[
-                    "total_errors"
-                ] = (
-                    bot.db.get(
-                        "total_errors",
-                        0
-                    ) + 1
-                )
-
-                bot.save_db()
-
-            except Exception:
-                pass
-
-            self.error(
+            send_json(
+                self,
                 500,
-                e
+                {
+                    "error":
+                        str(e)
+                        or "Ошибка сервера."
+                },
             )
 
-    def serve_index(self):
-
-        possible_paths = [
-            "miniapp/index.html",
-            os.path.join(
-                os.path.dirname(
-                    __file__
-                ),
-                "miniapp",
-                "index.html"
-            )
-        ]
-
-        index_path = None
-
-        for path in possible_paths:
-            if os.path.isfile(path):
-                index_path = path
-                break
-
-        if not index_path:
-            self.error(
-                500,
-                "miniapp/index.html не найден."
-            )
-            return
-
-        try:
-            with open(
-                index_path,
-                "rb"
-            ) as f:
-                body = f.read()
-
-            self.send_response(
-                200
-            )
-
-            self.send_header(
-                "Content-Type",
-                "text/html; charset=utf-8"
-            )
-
-            self.send_header(
-                "Content-Length",
-                str(len(body))
-            )
-
-            self.send_header(
-                "Cache-Control",
-                "no-cache"
-            )
-
-            self.end_headers()
-
-            self.wfile.write(
-                body
-            )
-
-        except Exception as e:
-            self.error(
-                500,
-                e
-            )
-
-
-# =========================================================
-# SERVER
-# =========================================================
 
 def run_server():
-
     bot.load_db()
 
     server = ThreadingHTTPServer(
-        (
-            HOST,
-            PORT
-        ),
-        MiniAppHandler
+        (HOST, PORT),
+        Handler,
     )
 
     print(
-        f"Bulba Mini App started "
+        f"Bulba Mini App server started "
         f"on {HOST}:{PORT}"
     )
 
     try:
         server.serve_forever()
-
-    except KeyboardInterrupt:
-        pass
-
     finally:
         server.server_close()
 
