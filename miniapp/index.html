@@ -1,2452 +1,1761 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-  <meta name="theme-color" content="#09090b">
-  <title>Bulba AI</title>
-
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-  <style>
-    :root {
-      --bg:#09090b;
-      --panel:#111114;
-      --panel2:#18181c;
-      --line:rgba(255,255,255,.08);
-      --text:#f5f5f7;
-      --muted:#8c8c95;
-      --user:#202024;
-      --danger:#ff5c5c;
-      --green:#66d18f;
-    }
-
-    * {
-      box-sizing:border-box;
-      -webkit-tap-highlight-color:transparent;
-    }
-
-    html,body {
-      margin:0;
-      padding:0;
-      width:100%;
-      height:100%;
-      overflow:hidden;
-      background:var(--bg);
-      color:var(--text);
-      font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",
-        "SF Pro Text",Arial,sans-serif;
-    }
-
-    button,input,textarea {
-      font:inherit;
-    }
-
-    button {
-      border:0;
-      outline:0;
-      color:inherit;
-      background:none;
-    }
-
-    #app {
-      width:100%;
-      height:100%;
-      display:flex;
-      flex-direction:column;
-      background:
-        radial-gradient(circle at 50% -20%,rgba(255,255,255,.06),transparent 35%),
-        var(--bg);
-    }
-
-    /* TOP */
-
-    .topbar {
-      height:64px;
-      min-height:64px;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      padding:8px 14px;
-      border-bottom:1px solid var(--line);
-      background:rgba(9,9,11,.86);
-      backdrop-filter:blur(20px);
-      -webkit-backdrop-filter:blur(20px);
-      z-index:10;
-    }
-
-    .brand {
-      display:flex;
-      align-items:center;
-      gap:11px;
-      min-width:0;
-    }
-
-    .logo,.welcomeLogo {
-      display:grid;
-      place-items:center;
-      background:#f5f5f7;
-      color:#08080a;
-      font-weight:900;
-    }
-
-    .logo {
-      width:39px;
-      height:39px;
-      border-radius:13px;
-      font-size:19px;
-    }
-
-    .brandText {
-      min-width:0;
-    }
-
-    .brandName {
-      font-size:16px;
-      font-weight:800;
-    }
-
-    .status {
-      display:flex;
-      align-items:center;
-      gap:5px;
-      margin-top:2px;
-      color:var(--muted);
-      font-size:11px;
-    }
-
-    .dot {
-      width:6px;
-      height:6px;
-      border-radius:50%;
-      background:var(--green);
-      box-shadow:0 0 10px rgba(102,209,143,.55);
-    }
-
-    .topActions {
-      display:flex;
-      align-items:center;
-      gap:7px;
-    }
-
-    .iconBtn,.modelBtn {
-      height:40px;
-      border:1px solid var(--line);
-      background:rgba(255,255,255,.035);
-      border-radius:13px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      cursor:pointer;
-    }
-
-    .iconBtn {
-      width:40px;
-      font-size:19px;
-    }
-
-    .modelBtn {
-      max-width:145px;
-      padding:0 12px;
-      gap:6px;
-      font-size:12px;
-      font-weight:700;
-    }
-
-    .modelName {
-      max-width:105px;
-      overflow:hidden;
-      text-overflow:ellipsis;
-      white-space:nowrap;
-    }
-
-    /* CHAT */
-
-    #chat {
-      flex:1;
-      overflow-y:auto;
-      overflow-x:hidden;
-      padding:18px 14px 14px;
-      -webkit-overflow-scrolling:touch;
-    }
-
-    #chat::-webkit-scrollbar {
-      width:0;
-    }
-
-    .welcome {
-      min-height:calc(100% - 20px);
-      display:flex;
-      flex-direction:column;
-      align-items:center;
-      justify-content:center;
-      text-align:center;
-      padding:30px;
-    }
-
-    .welcomeLogo {
-      width:70px;
-      height:70px;
-      border-radius:23px;
-      font-size:31px;
-      margin-bottom:20px;
-      box-shadow:0 15px 50px rgba(255,255,255,.08);
-    }
-
-    .welcome h1 {
-      margin:0;
-      font-size:28px;
-      letter-spacing:-1px;
-    }
-
-    .welcome p {
-      max-width:300px;
-      margin:9px 0 0;
-      color:var(--muted);
-      line-height:1.45;
-      font-size:14px;
-    }
-
-    .suggestions {
-      width:100%;
-      max-width:390px;
-      display:grid;
-      grid-template-columns:1fr 1fr;
-      gap:8px;
-      margin-top:24px;
-    }
-
-    .suggestion {
-      text-align:left;
-      padding:13px;
-      border:1px solid var(--line);
-      border-radius:15px;
-      background:rgba(255,255,255,.025);
-      color:#d9d9de;
-      font-size:12px;
-      line-height:1.35;
-    }
-
-    .messageRow {
-      display:flex;
-      width:100%;
-      margin-bottom:15px;
-    }
-
-    .messageRow.user {
-      justify-content:flex-end;
-    }
-
-    .messageRow.assistant {
-      justify-content:flex-start;
-    }
-
-    .bubble {
-      max-width:min(90%,720px);
-      padding:12px 14px;
-      border-radius:18px;
-      font-size:15px;
-      line-height:1.48;
-      overflow-wrap:anywhere;
-    }
-
-    .user .bubble {
-      background:var(--user);
-      border:1px solid rgba(255,255,255,.055);
-      border-bottom-right-radius:6px;
-      white-space:pre-wrap;
-    }
-
-    .assistant .bubble {
-      background:transparent;
-      padding-left:2px;
-      padding-right:2px;
-    }
-
-    .photo {
-      display:block;
-      max-width:260px;
-      max-height:340px;
-      border-radius:15px;
-      margin-bottom:7px;
-      object-fit:cover;
-      border:1px solid var(--line);
-    }
-
-    .copyBtn {
-      margin-top:8px;
-      color:#77777f;
-      font-size:11px;
-      cursor:pointer;
-    }
-
-    .copyBtn:active {
-      color:#fff;
-    }
-
-    .md {
-      white-space:normal;
-      overflow-wrap:anywhere;
-    }
-
-    .md p {
-      margin:0 0 9px;
-    }
-
-    .md p:last-child {
-      margin-bottom:0;
-    }
-
-    .md strong {
-      font-weight:800;
-      color:#fff;
-    }
-
-    .md code {
-      padding:2px 5px;
-      border-radius:6px;
-      background:rgba(255,255,255,.08);
-      font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-      font-size:.9em;
-    }
-
-    .md pre {
-      margin:10px 0;
-      padding:11px;
-      overflow-x:auto;
-      border-radius:12px;
-      background:#111114;
-      border:1px solid var(--line);
-    }
-
-    .md pre code {
-      padding:0;
-      background:none;
-    }
-
-    .md ul,.md ol {
-      margin:7px 0;
-      padding-left:21px;
-    }
-
-    /* TYPING */
-
-    .typing {
-      display:flex;
-      gap:4px;
-      align-items:center;
-      padding:8px 2px 15px;
-    }
-
-    .typing span {
-      width:6px;
-      height:6px;
-      border-radius:50%;
-      background:#77777f;
-      animation:pulse 1.1s infinite ease-in-out;
-    }
-
-    .typing span:nth-child(2) {
-      animation-delay:.15s;
-    }
-
-    .typing span:nth-child(3) {
-      animation-delay:.3s;
-    }
-
-    @keyframes pulse {
-      0%,70%,100% {
-        transform:scale(.7);
-        opacity:.35;
-      }
-      35% {
-        transform:scale(1);
-        opacity:1;
-      }
-    }
-
-    /* COMPOSER */
-
-    .composerWrap {
-      padding:8px 10px calc(10px + env(safe-area-inset-bottom));
-      background:linear-gradient(
-        to top,
-        rgba(9,9,11,1) 75%,
-        rgba(9,9,11,0)
-      );
-    }
-
-    .preview {
-      display:none;
-      padding:0 4px 8px;
-    }
-
-    .preview.show {
-      display:block;
-    }
-
-    .previewBox {
-      position:relative;
-      width:76px;
-      height:76px;
-    }
-
-    .preview img {
-      width:76px;
-      height:76px;
-      object-fit:cover;
-      border-radius:15px;
-      border:1px solid var(--line);
-    }
-
-    .removePhoto {
-      position:absolute;
-      top:-6px;
-      right:-6px;
-      width:23px;
-      height:23px;
-      border-radius:50%;
-      background:#242428;
-      border:1px solid rgba(255,255,255,.12);
-      font-size:14px;
-    }
-
-    .composer {
-      min-height:54px;
-      display:flex;
-      align-items:flex-end;
-      gap:7px;
-      padding:7px;
-      border:1px solid var(--line);
-      border-radius:19px;
-      background:rgba(18,18,21,.96);
-      box-shadow:0 12px 40px rgba(0,0,0,.35);
-    }
-
-    .attach,.send {
-      width:40px;
-      height:40px;
-      flex:0 0 40px;
-      border-radius:13px;
-      display:grid;
-      place-items:center;
-      cursor:pointer;
-    }
-
-    .attach {
-      color:#a3a3aa;
-      font-size:21px;
-    }
-
-    .send {
-      background:#f5f5f7;
-      color:#09090b;
-      font-size:18px;
-      font-weight:900;
-    }
-
-    .send:disabled {
-      opacity:.3;
-      cursor:default;
-    }
-
-    #input {
-      flex:1;
-      min-height:40px;
-      max-height:150px;
-      resize:none;
-      outline:none;
-      border:0;
-      background:transparent;
-      color:var(--text);
-      padding:10px 4px 9px;
-      line-height:1.35;
-      font-size:15px;
-    }
-
-    #input::placeholder {
-      color:#67676f;
-    }
-
-    #file {
-      display:none;
-    }
-
-    /* OVERLAY */
-
-    .overlay {
-      position:fixed;
-      inset:0;
-      z-index:50;
-      display:none;
-      background:rgba(0,0,0,.58);
-      backdrop-filter:blur(8px);
-      -webkit-backdrop-filter:blur(8px);
-    }
-
-    .overlay.show {
-      display:block;
-    }
-
-    .sheet {
-      position:absolute;
-      left:0;
-      right:0;
-      bottom:0;
-      max-height:82%;
-      overflow-y:auto;
-      background:#111114;
-      border-top:1px solid var(--line);
-      border-radius:24px 24px 0 0;
-      padding:12px 14px calc(20px + env(safe-area-inset-bottom));
-    }
-
-    .handle {
-      width:38px;
-      height:4px;
-      border-radius:99px;
-      background:#39393e;
-      margin:0 auto 16px;
-    }
-
-    .sheetTitle {
-      font-size:18px;
-      font-weight:800;
-      margin-bottom:12px;
-    }
-
-    .sheetBtn {
-      width:100%;
-      min-height:48px;
-      padding:11px 13px;
-      margin-bottom:7px;
-      border-radius:14px;
-      border:1px solid var(--line);
-      background:rgba(255,255,255,.035);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      text-align:left;
-      cursor:pointer;
-    }
-
-    .sheetBtn.danger {
-      color:var(--danger);
-    }
-
-    .modelOption {
-      width:100%;
-      min-height:53px;
-      padding:10px 12px;
-      margin-bottom:7px;
-      border-radius:15px;
-      border:1px solid var(--line);
-      background:rgba(255,255,255,.025);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      text-align:left;
-    }
-
-    .modelOption.selected {
-      background:rgba(255,255,255,.09);
-      border-color:rgba(255,255,255,.18);
-    }
-
-    .chatItem {
-      width:100%;
-      padding:12px;
-      margin-bottom:7px;
-      border-radius:15px;
-      border:1px solid var(--line);
-      background:rgba(255,255,255,.025);
-      text-align:left;
-    }
-
-    .chatItem.active {
-      background:rgba(255,255,255,.09);
-    }
-
-    .chatTitle {
-      font-size:14px;
-      font-weight:700;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow:ellipsis;
-    }
-
-    .chatMeta {
-      margin-top:4px;
-      color:var(--muted);
-      font-size:11px;
-    }
-
-    .chatActions {
-      display:flex;
-      gap:6px;
-      margin-top:9px;
-    }
-
-    .smallBtn {
-      padding:7px 10px;
-      border-radius:9px;
-      background:rgba(255,255,255,.06);
-      font-size:11px;
-    }
-
-    .smallBtn.danger {
-      color:var(--danger);
-    }
-
-    .formInput {
-      width:100%;
-      min-height:46px;
-      padding:11px 13px;
-      margin-bottom:8px;
-      border:1px solid var(--line);
-      border-radius:13px;
-      outline:none;
-      color:#fff;
-      background:#18181c;
-    }
-
-    .statBox {
-      padding:13px;
-      border:1px solid var(--line);
-      border-radius:14px;
-      background:rgba(255,255,255,.025);
-      margin-bottom:8px;
-    }
-
-    .statValue {
-      font-size:22px;
-      font-weight:800;
-    }
-
-    .statLabel {
-      margin-top:3px;
-      color:var(--muted);
-      font-size:12px;
-    }
-
-    /* TOAST */
-
-    #toast {
-      position:fixed;
-      left:50%;
-      bottom:calc(86px + env(safe-area-inset-bottom));
-      transform:translate(-50%,15px);
-      z-index:100;
-      max-width:88%;
-      padding:10px 14px;
-      border-radius:13px;
-      background:#242428;
-      border:1px solid var(--line);
-      color:#fff;
-      font-size:12px;
-      text-align:center;
-      opacity:0;
-      pointer-events:none;
-      transition:.18s;
-    }
-
-    #toast.show {
-      opacity:1;
-      transform:translate(-50%,0);
-    }
-
-    @media (min-width:700px) {
-      .topbar {
-        padding-left:24px;
-        padding-right:24px;
-      }
-
-      #chat {
-        padding-left:max(14px,calc((100% - 850px) / 2));
-        padding-right:max(14px,calc((100% - 850px) / 2));
-      }
-
-      .composerWrap {
-        padding-left:max(10px,calc((100% - 850px) / 2));
-        padding-right:max(10px,calc((100% - 850px) / 2));
-      }
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#09090b">
+<title>Bulba AI</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:#09090b;--panel:#111114;--panel2:#17171b;--line:rgba(255,255,255,.09);--text:#f5f5f7;--muted:#8c8c95;--user:#202024;--danger:#ff5c5c;--ok:#66d18f}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",Arial,sans-serif}
+button,input,textarea{font:inherit}
+button{border:0;background:none;color:inherit;outline:0}
+#app{height:100%;display:flex;flex-direction:column;background:radial-gradient(circle at 50% -20%,rgba(255,255,255,.07),transparent 36%),var(--bg)}
+
+.topbar{height:64px;min-height:64px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line);background:rgba(9,9,11,.84);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);z-index:5}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.logo,.welcomeLogo{display:grid;place-items:center;background:#f5f5f7;color:#08080a;font-weight:900;box-shadow:0 10px 35px rgba(255,255,255,.08)}
+.logo{width:39px;height:39px;border-radius:13px;font-size:19px}
+.brandName{font-size:16px;font-weight:800}
+.status{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11px;margin-top:2px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px rgba(102,209,143,.55)}
+.topActions{display:flex;gap:7px}
+.iconBtn,.modelBtn{height:40px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.035);display:flex;align-items:center;justify-content:center}
+.iconBtn{width:40px;font-size:20px}
+.modelBtn{max-width:145px;padding:0 11px;gap:6px;font-size:12px;font-weight:700}
+.modelName{max-width:105px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+#chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 13px 12px;-webkit-overflow-scrolling:touch;scroll-behavior:smooth}
+#chat::-webkit-scrollbar{width:0}
+.welcome{min-height:calc(100% - 15px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:25px}
+.welcomeLogo{width:68px;height:68px;border-radius:22px;font-size:30px;margin-bottom:18px}
+.welcome h1{margin:0;font-size:28px;letter-spacing:-1px}
+.welcome p{max-width:320px;margin:9px 0 0;color:var(--muted);line-height:1.45;font-size:14px}
+.suggestions{width:100%;max-width:400px;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:22px}
+.suggestion{padding:13px;text-align:left;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.025);color:#ddd;font-size:12px;line-height:1.35}
+.messageRow{display:flex;width:100%;margin-bottom:15px}
+.messageRow.user{justify-content:flex-end}
+.messageRow.assistant{justify-content:flex-start}
+.bubble{max-width:min(90%,760px);padding:11px 14px;border-radius:18px;font-size:15px;line-height:1.5;overflow-wrap:anywhere}
+.user .bubble{background:var(--user);border:1px solid rgba(255,255,255,.055);border-bottom-right-radius:6px;white-space:pre-wrap}
+.assistant .bubble{padding:4px 2px;background:transparent}
+.photo{display:block;max-width:270px;max-height:360px;border-radius:15px;margin-bottom:7px;border:1px solid var(--line);object-fit:cover}
+.copyBtn{display:block;margin-top:8px;color:#77777f;font-size:11px}
+.copyBtn:active{color:#fff}
+.md p{margin:0 0 9px}
+.md p:last-child{margin-bottom:0}
+.md strong{font-weight:800}
+.md code{padding:2px 5px;border-radius:6px;background:#1b1b20;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}
+.md pre{margin:9px 0;padding:11px;overflow:auto;border-radius:12px;background:#151519;border:1px solid var(--line);white-space:pre}
+.md ul,.md ol{margin:7px 0 9px;padding-left:21px}
+.md a{color:#dcdce1;text-decoration:underline}
+.typing{display:flex;gap:4px;padding:9px 2px}
+.typing span{width:6px;height:6px;border-radius:50%;background:#77777f;animation:pulse 1.1s infinite ease-in-out}
+.typing span:nth-child(2){animation-delay:.15s}
+.typing span:nth-child(3){animation-delay:.3s}
+@keyframes pulse{0%,70%,100%{transform:scale(.7);opacity:.35}35%{transform:scale(1);opacity:1}}
+
+.composerWrap{padding:7px 9px calc(9px + env(safe-area-inset-bottom));background:linear-gradient(to top,rgba(9,9,11,1) 75%,rgba(9,9,11,0))}
+.preview{display:none;padding:0 4px 8px}
+.preview.show{display:block}
+.previewBox{position:relative;width:76px;height:76px}
+.preview img{width:76px;height:76px;object-fit:cover;border-radius:15px;border:1px solid var(--line)}
+.removePhoto{position:absolute;top:-6px;right:-6px;width:23px;height:23px;border-radius:50%;background:#242428;border:1px solid rgba(255,255,255,.12);font-size:14px}
+.composer{min-height:54px;display:flex;align-items:flex-end;gap:7px;padding:7px;border:1px solid var(--line);border-radius:19px;background:rgba(18,18,21,.96);box-shadow:0 12px 40px rgba(0,0,0,.35)}
+.attach{width:40px;height:40px;flex:0 0 40px;border-radius:13px;color:#a3a3aa;font-size:21px}
+.attach:active{background:rgba(255,255,255,.07)}
+#input{flex:1;min-height:40px;max-height:150px;resize:none;outline:0;border:0;background:transparent;color:var(--text);padding:10px 4px 9px;line-height:1.35;font-size:15px}
+#input::placeholder{color:#67676f}
+.send{width:40px;height:40px;flex:0 0 40px;border-radius:13px;display:grid;place-items:center;background:#f5f5f7;color:#09090b;font-size:18px;font-weight:900}
+.send:disabled{opacity:.3}
+#file{display:none}
+
+.overlay{position:fixed;inset:0;z-index:50;display:none;background:rgba(0,0,0,.58);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.overlay.show{display:block}
+.sheet{position:absolute;left:0;right:0;bottom:0;max-height:84%;overflow-y:auto;background:#111114;border-top:1px solid var(--line);border-radius:24px 24px 0 0;padding:12px 14px calc(20px + env(safe-area-inset-bottom));animation:sheetIn .18s ease-out}
+@keyframes sheetIn{from{transform:translateY(25px);opacity:.5}to{transform:translateY(0);opacity:1}}
+.handle{width:38px;height:4px;border-radius:99px;background:#39393e;margin:0 auto 15px}
+.sheetTitle{font-size:18px;font-weight:800;margin-bottom:11px}
+.sheetSub{color:var(--muted);font-size:12px;margin:-5px 0 12px}
+.rowBtn,.chatItem,.modelOption,.styleOption{width:100%;min-height:50px;padding:10px 12px;margin-bottom:7px;border-radius:15px;border:1px solid var(--line);background:rgba(255,255,255,.025);display:flex;align-items:center;justify-content:space-between;text-align:left}
+.rowBtn:active,.chatItem:active,.modelOption:active,.styleOption:active{background:rgba(255,255,255,.08)}
+.selected{background:rgba(255,255,255,.09)!important;border-color:rgba(255,255,255,.18)!important}
+.itemTitle{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.itemMeta{font-size:11px;color:var(--muted);margin-top:3px}
+.itemLeft{min-width:0}
+.check{font-weight:900}
+.danger{color:var(--danger)}
+.sheetActions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}
+.textInput{width:100%;height:46px;margin:4px 0 8px;padding:0 13px;border:1px solid var(--line);border-radius:13px;outline:0;background:#18181c;color:var(--text)}
+.memoryItem{padding:10px 12px;border:1px solid var(--line);border-radius:13px;margin-bottom:7px;background:rgba(255,255,255,.025)}
+.memoryKey{font-size:12px;font-weight:800}
+.memoryValue{font-size:12px;color:#bbb;margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere}
+
+#toast{position:fixed;left:50%;bottom:calc(86px + env(safe-area-inset-bottom));transform:translate(-50%,15px);z-index:100;max-width:88%;padding:10px 14px;border-radius:13px;background:#242428;border:1px solid var(--line);color:#fff;font-size:12px;text-align:center;opacity:0;pointer-events:none;transition:.18s}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+@media(min-width:700px){
+.topbar{padding-left:24px;padding-right:24px}
+#chat{padding-left:max(14px,calc((100% - 850px)/2));padding-right:max(14px,calc((100% - 850px)/2))}
+.composerWrap{padding-left:max(10px,calc((100% - 850px)/2));padding-right:max(10px,calc((100% - 850px)/2))}
+}
+</style>
 </head>
 
 <body>
-
 <div id="app">
 
-  <header class="topbar">
-
-    <div class="brand">
-      <div class="logo">B</div>
-
-      <div class="brandText">
-        <div class="brandName">Bulba AI</div>
-
-        <div class="status">
-          <span class="dot"></span>
-          <span>Online</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="topActions">
-
-      <button
-        class="modelBtn"
-        id="modelButton"
-        type="button"
-      >
-        <span class="modelName" id="modelName">Auto</span>
-        <span>⌄</span>
-      </button>
-
-      <button
-        class="iconBtn"
-        id="newChat"
-        type="button"
-      >
-        ＋
-      </button>
-
-    </div>
-
-  </header>
-
-
-  <main id="chat">
-
-    <section class="welcome" id="welcome">
-
-      <div class="welcomeLogo">B</div>
-
-      <h1>Bulba AI</h1>
-
-      <p>
-        Быстрый AI прямо внутри Telegram.
-        Текст, изображения и разные модели.
-      </p>
-
-      <div class="suggestions">
-
-        <button
-          class="suggestion"
-          data-suggestion="Объясни мне сложную тему простыми словами"
-        >
-          Объясни сложную тему
-        </button>
-
-        <button
-          class="suggestion"
-          data-suggestion="Помоги мне решить задачу и объясни решение"
-        >
-          Помоги с задачей
-        </button>
-
-        <button
-          class="suggestion"
-          data-suggestion="Проанализируй мою идею и предложи улучшения"
-        >
-          Разбери мою идею
-        </button>
-
-        <button
-          class="suggestion"
-          data-suggestion="Что ты умеешь?"
-        >
-          Что ты умеешь?
-        </button>
-
-      </div>
-
-    </section>
-
-    <div id="messages"></div>
-
-  </main>
-
-
-  <div class="composerWrap">
-
-    <div class="preview" id="preview">
-
-      <div class="previewBox">
-
-        <img id="previewImage" alt="Фото">
-
-        <button
-          class="removePhoto"
-          id="removePhoto"
-          type="button"
-        >
-          ×
-        </button>
-
-      </div>
-
-    </div>
-
-
-    <div class="composer">
-
-      <button
-        class="attach"
-        id="attach"
-        type="button"
-      >
-        ＋
-      </button>
-
-      <textarea
-        id="input"
-        rows="1"
-        maxlength="12000"
-        placeholder="Сообщение..."
-      ></textarea>
-
-      <button
-        class="send"
-        id="send"
-        type="button"
-      >
-        ↑
-      </button>
-
-    </div>
-
-  </div>
-
+<header class="topbar">
+<div class="brand">
+<div class="logo">B</div>
+<div>
+<div class="brandName">Bulba AI</div>
+<div class="status"><span class="dot"></span><span id="statusText">Online</span></div>
+</div>
 </div>
 
+<div class="topActions">
+<button class="modelBtn" id="modelButton">
+<span class="modelName" id="modelName">Auto</span>
+<span>⌄</span>
+</button>
+<button class="iconBtn" id="newChat" aria-label="Новый чат">＋</button>
+</div>
+</header>
 
-<input
-  id="file"
-  type="file"
-  accept="image/*"
->
+<main id="chat">
 
+<section class="welcome" id="welcome">
+<div class="welcomeLogo">B</div>
+<h1>Bulba AI</h1>
+<p>AI внутри Telegram — модели, изображения, память и полноценные чаты.</p>
 
-<div
-  class="overlay"
-  id="overlay"
->
+<div class="suggestions">
+<button class="suggestion" data-suggestion="Объясни мне сложную тему простыми словами">Объясни сложную тему</button>
+<button class="suggestion" data-suggestion="Помоги мне решить задачу и объясни решение">Помоги с задачей</button>
+<button class="suggestion" data-suggestion="Проанализируй мою идею и предложи улучшения">Разбери мою идею</button>
+<button class="suggestion" data-suggestion="Что ты умеешь?">Что ты умеешь?</button>
+</div>
+</section>
 
-  <div class="sheet" id="sheet">
+<div id="messages"></div>
 
-    <div class="handle"></div>
+</main>
 
-    <div class="sheetTitle" id="sheetTitle">
-      Bulba AI
-    </div>
+<div class="composerWrap">
 
-    <div id="sheetContent"></div>
-
-  </div>
-
+<div class="preview" id="preview">
+<div class="previewBox">
+<img id="previewImage" alt="Фото">
+<button class="removePhoto" id="removePhoto">×</button>
+</div>
 </div>
 
+<div class="composer">
+<button class="attach" id="attach" aria-label="Добавить фото">＋</button>
+
+<textarea
+id="input"
+rows="1"
+maxlength="12000"
+placeholder="Сообщение..."
+></textarea>
+
+<button class="send" id="send" aria-label="Отправить">↑</button>
+</div>
+
+</div>
+</div>
+
+<input id="file" type="file" accept="image/*">
+
+<div class="overlay" id="overlay">
+<div class="sheet" id="sheet">
+<div class="handle"></div>
+<div class="sheetTitle" id="sheetTitle"></div>
+<div id="sheetContent"></div>
+</div>
+</div>
 
 <div id="toast"></div>
 
-
 <script>
 (() => {
-
-  const tg = window.Telegram?.WebApp;
-
-  if (tg) {
-    tg.ready();
-    tg.expand();
-
-    try {
-      tg.setHeaderColor("#09090b");
-      tg.setBackgroundColor("#09090b");
-    } catch (_) {}
-  }
-
-
-  const S = {
-    model: "auto",
-    models: [],
-    style: "normal",
-    activeChat: "main",
-    chats: {},
-    image: null,
-    sending: false
-  };
-
-
-  const $ = id => document.getElementById(id);
-
-  const chat = $("chat");
-  const messages = $("messages");
-  const welcome = $("welcome");
-  const input = $("input");
-  const send = $("send");
-  const file = $("file");
-  const preview = $("preview");
-  const previewImage = $("previewImage");
-  const overlay = $("overlay");
-  const sheetTitle = $("sheetTitle");
-  const sheetContent = $("sheetContent");
-  const modelName = $("modelName");
-
-
-  function initData() {
-    return tg?.initData || "";
-  }
-
-
-  async function api(path, options = {}) {
-
-    const headers = {
-      "Content-Type": "application/json",
-      "X-Telegram-Init-Data": initData(),
-      ...(options.headers || {})
-    };
-
-    const response = await fetch(path, {
-      ...options,
-      headers
-    });
-
-    let data;
-
-    try {
-      data = await response.json();
-    } catch (_) {
-      throw new Error("Сервер вернул некорректный ответ.");
-    }
-
-    if (!response.ok || data?.ok === false) {
-      throw new Error(
-        data?.error ||
-        `Ошибка сервера: ${response.status}`
-      );
-    }
-
-    return data;
-  }
-
-
-  function toast(text) {
-
-    const el = $("toast");
-
-    el.textContent = text;
-    el.classList.add("show");
-
-    clearTimeout(toast.timer);
-
-    toast.timer = setTimeout(() => {
-      el.classList.remove("show");
-    }, 2600);
-  }
-
-
-  function haptic(type = "light") {
-
-    try {
-      tg?.HapticFeedback?.impactOccurred(type);
-    } catch (_) {}
-  }
-
-
-  function scrollBottom() {
-
-    requestAnimationFrame(() => {
-      chat.scrollTop = chat.scrollHeight;
-    });
-  }
-
-
-  function escapeHtml(text) {
-
-    return String(text)
-      .replaceAll("&","&amp;")
-      .replaceAll("<","&lt;")
-      .replaceAll(">","&gt;")
-      .replaceAll('"',"&quot;")
-      .replaceAll("'","&#039;");
-  }
-
-
-  function markdown(text) {
-
-    let html = escapeHtml(text || "");
-
-    const blocks = [];
-
-    html = html.replace(
-      /```([\s\S]*?)```/g,
-      (_, code) => {
-        const id = blocks.length;
-        blocks.push(
-          `<pre><code>${code.trim()}</code></pre>`
-        );
-        return `@@CODE${id}@@`;
-      }
-    );
-
-    html = html.replace(
-      /`([^`]+)`/g,
-      "<code>$1</code>"
-    );
-
-    html = html.replace(
-      /\*\*(.+?)\*\*/g,
-      "<strong>$1</strong>"
-    );
-
-    html = html.replace(
-      /^### (.+)$/gm,
-      "<strong>$1</strong>"
-    );
-
-    html = html.replace(
-      /^## (.+)$/gm,
-      "<strong>$1</strong>"
-    );
-
-    html = html.replace(
-      /^# (.+)$/gm,
-      "<strong>$1</strong>"
-    );
-
-    html = html.replace(
-      /^\s*[-*] (.+)$/gm,
-      "• $1"
-    );
-
-    html = html.replace(
-      /\n{2,}/g,
-      "</p><p>"
-    );
-
-    html = "<p>" + html + "</p>";
-
-    html = html.replace(
-      /\n/g,
-      "<br>"
-    );
-
-    html = html.replace(
-      /@@CODE(\d+)@@/g,
-      (_, id) => blocks[Number(id)]
-    );
-
-    return html;
-  }
-
-
-  function renderMessage(
-    role,
-    text,
-    imageData = null
-  ) {
-
-    const row = document.createElement("div");
-
-    row.className =
-      `messageRow ${role}`;
-
-
-    const bubble =
-      document.createElement("div");
-
-    bubble.className = "bubble";
-
-
-    if (imageData) {
-
-      const img =
-        document.createElement("img");
-
-      img.className = "photo";
-      img.src = imageData;
-      img.alt = "Изображение";
-
-      bubble.appendChild(img);
-    }
-
-
-    if (text) {
-
-      const textEl =
-        document.createElement("div");
-
-      textEl.className = "msgText";
-
-      if (role === "assistant") {
-
-        textEl.className = "msgText md";
-
-        textEl.innerHTML =
-          markdown(text);
-
-      } else {
-
-        textEl.textContent = text;
-      }
-
-      bubble.appendChild(textEl);
-    }
-
-
-    if (role === "assistant") {
-
-      const copy =
-        document.createElement("button");
-
-      copy.className = "copyBtn";
-      copy.textContent = "Копировать";
-
-      copy.onclick = async () => {
-
-        try {
-
-          await navigator.clipboard.writeText(
-            text || ""
-          );
-
-          copy.textContent = "Скопировано";
-
-          haptic("light");
-
-          setTimeout(() => {
-            copy.textContent = "Копировать";
-          }, 1200);
-
-        } catch (_) {
-
-          toast("Не удалось скопировать");
-        }
-      };
-
-      bubble.appendChild(copy);
-    }
-
-
-    row.appendChild(bubble);
-    messages.appendChild(row);
-
-    welcome.style.display = "none";
-
-    scrollBottom();
-  }
-
-
-  function renderHistory() {
-
-    messages.innerHTML = "";
-
-    const active =
-      S.chats[S.activeChat];
-
-    if (!active || !active.messages?.length) {
-
-      welcome.style.display = "flex";
-
-      return;
-    }
-
-    welcome.style.display = "none";
-
-    for (const msg of active.messages) {
-
-      renderMessage(
-        msg.role === "assistant"
-          ? "assistant"
-          : "user",
-        msg.content || "",
-        msg.image || null
-      );
-    }
-  }
-
-
-  function typing(show) {
-
-    const old = $("typing");
-
-    if (old) old.remove();
-
-    if (!show) return;
-
-    const row =
-      document.createElement("div");
-
-    row.id = "typing";
-    row.className = "messageRow assistant";
-
-    const bubble =
-      document.createElement("div");
-
-    bubble.className = "bubble";
-
-    const dots =
-      document.createElement("div");
-
-    dots.className = "typing";
-
-    dots.innerHTML =
-      "<span></span><span></span><span></span>";
-
-    bubble.appendChild(dots);
-    row.appendChild(bubble);
-    messages.appendChild(row);
-
-    scrollBottom();
-  }
-
-
-  function setModelName() {
-
-    modelName.textContent =
-      S.model === "auto"
-        ? "Auto"
-        : S.model;
-  }
-
-
-  function openSheet(title, contentBuilder) {
-
-    sheetTitle.textContent = title;
-
-    sheetContent.innerHTML = "";
-
-    contentBuilder(sheetContent);
-
-    overlay.classList.add("show");
-  }
-
-
-  function closeSheet() {
-
-    overlay.classList.remove("show");
-  }
-
-
-  function renderModels() {
-
-    openSheet(
-      "Выберите модель",
-      box => {
-
-        const all = [
-          { id:"auto", name:"Auto" },
-          ...S.models
-        ];
-
-        for (const model of all) {
-
-          const button =
-            document.createElement("button");
-
-          button.className =
-            "modelOption" +
-            (
-              model.id === S.model
-                ? " selected"
-                : ""
-            );
-
-          button.innerHTML = `
-            <span>${escapeHtml(model.name || model.id)}</span>
-            <span>${model.id === S.model ? "✓" : ""}</span>
-          `;
-
-          button.onclick = async () => {
-
-            const previous = S.model;
-
-            S.model = model.id;
-
-            setModelName();
-            closeSheet();
-
-            try {
-
-              await api(
-                "/api/settings",
-                {
-                  method:"POST",
-                  body:JSON.stringify({
-                    model:S.model
-                  })
-                }
-              );
-
-              haptic("light");
-
-            } catch (e) {
-
-              S.model = previous;
-              setModelName();
-
-              toast(e.message);
-            }
-          };
-
-          box.appendChild(button);
-        }
-      }
-    );
-  }
-
-
-  async function loadState() {
-
-    const data =
-      await api("/api/state");
-
-    const state =
-      data.state || {};
-
-    S.model =
-      state.model || "auto";
-
-    S.style =
-      state.style || "normal";
-
-    S.activeChat =
-      String(
-        state.active_chat || "main"
-      );
-
-    S.chats = {};
-
-    for (
-      const item of (
-        state.chats || []
-      )
-    ) {
-
-      S.chats[String(item.id)] = item;
-    }
-
-    setModelName();
-
-    renderHistory();
-  }
-
-
-  async function loadModels() {
-
-    const data =
-      await api("/api/models");
-
-    S.models =
-      Array.isArray(data.models)
-        ? data.models
-        : [];
-
-    if (
-      data.selected &&
-      S.model === "auto"
-    ) {
-      S.model = "auto";
-    }
-
-    setModelName();
-  }
-
-
-  async function boot() {
-
-    if (!initData()) {
-
-      toast(
-        "Открой Bulba AI через Telegram."
-      );
-
-      return;
-    }
-
-    try {
-
-      /*
-       * Модели загружаются один раз.
-       * При каждом открытии списка запрос
-       * к серверу не выполняется.
-       */
-      await Promise.all([
-        loadState(),
-        loadModels()
-      ]);
-
-    } catch (e) {
-
-      console.error(e);
-
-      toast(
-        e.message ||
-        "Не удалось подключиться к Bulba."
-      );
-    }
-  }
-
-
-  function autoResize() {
-
-    input.style.height = "auto";
-
-    input.style.height =
-      Math.min(
-        input.scrollHeight,
-        150
-      ) + "px";
-
-    updateSendState();
-  }
-
-
-  function updateSendState() {
-
-    send.disabled =
-      S.sending ||
-      (
-        !input.value.trim() &&
-        !S.image
-      );
-  }
-
-
-  async function resizeImage(selectedFile) {
-
-    try {
-
-      if (
-        typeof createImageBitmap ===
-        "function"
-      ) {
-
-        const bitmap =
-          await createImageBitmap(
-            selectedFile
-          );
-
-        return drawImage(
-          bitmap.width,
-          bitmap.height,
-          ctx => {
-            ctx.drawImage(
-              bitmap,
-              0,
-              0,
-              canvasWidth(
-                bitmap.width,
-                bitmap.height
-              ),
-              canvasHeight(
-                bitmap.width,
-                bitmap.height
-              )
-            );
-          }
-        );
-      }
-
-    } catch (_) {}
-
-    return new Promise(
-      (resolve,reject) => {
-
-        const reader =
-          new FileReader();
-
-        reader.onload = () => {
-
-          const img =
-            new Image();
-
-          img.onload = () => {
-
-            const result =
-              resizeFromDimensions(
-                img.width,
-                img.height,
-                ctx => {
-                  const size =
-                    getDimensions(
-                      img.width,
-                      img.height
-                    );
-
-                  ctx.drawImage(
-                    img,
-                    0,
-                    0,
-                    size.width,
-                    size.height
-                  );
-                }
-              );
-
-            resolve(result);
-          };
-
-          img.onerror = reject;
-
-          img.src = reader.result;
-        };
-
-        reader.onerror = reject;
-
-        reader.readAsDataURL(
-          selectedFile
-        );
-      }
-    );
-  }
-
-
-  function getDimensions(width,height) {
-
-    const MAX = 1600;
-
-    if (
-      width <= MAX &&
-      height <= MAX
-    ) {
-      return {
-        width,
-        height
-      };
-    }
-
-    const scale =
-      Math.min(
-        MAX / width,
-        MAX / height
-      );
-
-    return {
-      width:Math.round(width * scale),
-      height:Math.round(height * scale)
-    };
-  }
-
-
-  function resizeFromDimensions(
-    width,
-    height,
-    draw
-  ) {
-
-    const size =
-      getDimensions(width,height);
-
-    const canvas =
-      document.createElement("canvas");
-
-    canvas.width = size.width;
-    canvas.height = size.height;
-
-    const ctx =
-      canvas.getContext("2d");
-
-    draw(ctx);
-
-    return canvas.toDataURL(
-      "image/jpeg",
-      .82
-    );
-  }
-
-
-  function drawImage(
-    width,
-    height,
-    draw
-  ) {
-
-    return resizeFromDimensions(
-      width,
-      height,
-      draw
-    );
-  }
-
-
-  function canvasWidth(w,h) {
-    return getDimensions(w,h).width;
-  }
-
-
-  function canvasHeight(w,h) {
-    return getDimensions(w,h).height;
-  }
-
-
-  async function chooseImage(selectedFile) {
-
-    if (!selectedFile) return;
-
-    if (
-      !selectedFile.type.startsWith(
-        "image/"
-      )
-    ) {
-
-      toast("Выбери изображение.");
-
-      return;
-    }
-
-    if (
-      selectedFile.size >
-      8 * 1024 * 1024
-    ) {
-
-      toast(
-        "Фото слишком большое. Максимум 8 МБ."
-      );
-
-      return;
-    }
-
-    try {
-
-      const data =
-        await resizeImage(
-          selectedFile
-        );
-
-      S.image = data;
-
-      previewImage.src = data;
-
-      preview.classList.add("show");
-
-      updateSendState();
-
-      haptic("light");
-
-    } catch (e) {
-
-      console.error(e);
-
-      toast(
-        "Не удалось обработать фото."
-      );
-    }
-  }
-
-
-  function removeImage() {
-
-    S.image = null;
-
-    previewImage.src = "";
-
-    preview.classList.remove("show");
-
-    file.value = "";
-
-    updateSendState();
-  }
-
-
-  async function sendMessage() {
-
-    if (S.sending) return;
-
-    const text =
-      input.value.trim();
-
-    if (!text && !S.image) return;
-
-
-    S.sending = true;
-
-    updateSendState();
-
-
-    const image =
-      S.image;
-
-
-    input.value = "";
-
-    autoResize();
-
-    removeImage();
-
-
-    renderMessage(
-      "user",
-      text,
-      image
-    );
-
-    typing(true);
-
-
-    try {
-
-      const data =
-        await api(
-          "/api/chat",
-          {
-            method:"POST",
-            body:JSON.stringify({
-              message:text,
-              model:S.model,
-              chat_id:S.activeChat,
-              image:image
-            })
-          }
-        );
-
-
-      typing(false);
-
-
-      renderMessage(
-        "assistant",
-        data.answer || ""
-      );
-
-
-      if (data.state) {
-
-        applyState(
-          data.state
-        );
-      }
-
-      haptic("light");
-
-    } catch (e) {
-
-      typing(false);
-
-      /*
-       * Не добавляем ошибочный запрос
-       * в локальную историю.
-       */
-      renderMessage(
-        "assistant",
-        "Ошибка: " +
-        (
-          e.message ||
-          "не удалось получить ответ"
-        )
-      );
-
-      haptic("heavy");
-
-    } finally {
-
-      S.sending = false;
-
-      updateSendState();
-
-      input.focus();
-    }
-  }
-
-
-  function applyState(state) {
-
-    if (!state) return;
-
-    S.model =
-      state.model ||
-      S.model;
-
-    S.style =
-      state.style ||
-      S.style;
-
-    S.activeChat =
-      String(
-        state.active_chat ||
-        S.activeChat
-      );
-
-    S.chats = {};
-
-    for (
-      const item of (
-        state.chats || []
-      )
-    ) {
-
-      S.chats[
-        String(item.id)
-      ] = item;
-    }
-
-    setModelName();
-  }
-
-
-  async function createChat() {
-
-    try {
-
-      const data =
-        await api(
-          "/api/chat/new",
-          {
-            method:"POST",
-            body:JSON.stringify({})
-          }
-        );
-
-      if (data.chat_id) {
-
-        S.activeChat =
-          String(data.chat_id);
-      }
-
-      if (data.state) {
-
-        applyState(
-          data.state
-        );
-      }
-
-      renderHistory();
-
-      closeSheet();
-
-      input.value = "";
-
-      autoResize();
-
-      removeImage();
-
-      haptic("medium");
-
-    } catch (e) {
-
-      toast(e.message);
-    }
-  }
-
-
-  function openChats() {
-
-    openSheet(
-      "💬 Чаты",
-      box => {
-
-        const newBtn =
-          document.createElement("button");
-
-        newBtn.className = "sheetBtn";
-
-        newBtn.innerHTML =
-          "<span>🆕 Новый чат</span><span>＋</span>";
-
-        newBtn.onclick =
-          createChat;
-
-        box.appendChild(newBtn);
-
-
-        const chats =
-          Object.values(S.chats);
-
-        chats.sort(
-          (a,b) =>
-            (b.last_request || b.created || 0) -
-            (a.last_request || a.created || 0)
-        );
-
-
-        for (const item of chats) {
-
-          const el =
-            document.createElement("div");
-
-          el.className =
-            "chatItem" +
-            (
-              String(item.id) ===
-              S.activeChat
-                ? " active"
-                : ""
-            );
-
-          const title =
-            document.createElement("div");
-
-          title.className =
-            "chatTitle";
-
-          title.textContent =
-            item.title ||
-            "Новый чат";
-
-
-          const meta =
-            document.createElement("div");
-
-          meta.className =
-            "chatMeta";
-
-          meta.textContent =
-            `${item.requests || 0} запросов`;
-
-
-          const actions =
-            document.createElement("div");
-
-          actions.className =
-            "chatActions";
-
-
-          const select =
-            document.createElement("button");
-
-          select.className =
-            "smallBtn";
-
-          select.textContent =
-            "Открыть";
-
-          select.onclick = async () => {
-
-            S.activeChat =
-              String(item.id);
-
-            try {
-
-              await api(
-                "/api/chat/select",
-                {
-                  method:"POST",
-                  body:JSON.stringify({
-                    chat_id:S.activeChat
-                  })
-                }
-              );
-
-              renderHistory();
-
-              closeSheet();
-
-            } catch (e) {
-
-              toast(e.message);
-            }
-          };
-
-
-          const rename =
-            document.createElement("button");
-
-          rename.className =
-            "smallBtn";
-
-          rename.textContent =
-            "Переименовать";
-
-          rename.onclick =
-            () => renameChat(item.id);
-
-
-          const clear =
-            document.createElement("button");
-
-          clear.className =
-            "smallBtn";
-
-          clear.textContent =
-            "Очистить";
-
-          clear.onclick =
-            () => clearChat(item.id);
-
-
-          const del =
-            document.createElement("button");
-
-          del.className =
-            "smallBtn danger";
-
-          del.textContent =
-            "Удалить";
-
-          del.onclick =
-            () => deleteChat(item.id);
-
-
-          actions.appendChild(select);
-          actions.appendChild(rename);
-          actions.appendChild(clear);
-          actions.appendChild(del);
-
-          el.appendChild(title);
-          el.appendChild(meta);
-          el.appendChild(actions);
-
-          box.appendChild(el);
-        }
-      }
-    );
-  }
-
-
-  async function renameChat(chatId) {
-
-    const current =
-      S.chats[String(chatId)]?.title ||
-      "";
-
-    const title =
-      prompt(
-        "Новое название чата:",
-        current
-      );
-
-    if (!title) return;
-
-    try {
-
-      const data =
-        await api(
-          "/api/chat/rename",
-          {
-            method:"POST",
-            body:JSON.stringify({
-              chat_id:String(chatId),
-              title:title
-            })
-          }
-        );
-
-      if (data.state) {
-        applyState(data.state);
-      }
-
-      openChats();
-
-    } catch (e) {
-
-      toast(e.message);
-    }
-  }
-
-
-  async function clearChat(chatId) {
-
-    if (
-      !confirm(
-        "Очистить историю этого чата?"
-      )
-    ) return;
-
-    try {
-
-      const data =
-        await api(
-          "/api/chat/clear",
-          {
-            method:"POST",
-            body:JSON.stringify({
-              chat_id:String(chatId)
-            })
-          }
-        );
-
-      if (data.state) {
-        applyState(data.state);
-      }
-
-      renderHistory();
-
-      openChats();
-
-    } catch (e) {
-
-      toast(e.message);
-    }
-  }
-
-
-  async function deleteChat(chatId) {
-
-    if (
-      !confirm(
-        "Удалить этот чат?"
-      )
-    ) return;
-
-    try {
-
-      const data =
-        await api(
-          "/api/chat/delete",
-          {
-            method:"POST",
-            body:JSON.stringify({
-              chat_id:String(chatId)
-            })
-          }
-        );
-
-      if (data.state) {
-        applyState(data.state);
-      }
-
-      renderHistory();
-
-      openChats();
-
-    } catch (e) {
-
-      toast(e.message);
-    }
-  }
-
-
-  function openSettings() {
-
-    openSheet(
-      "⚙️ Настройки",
-      box => {
-
-        const title =
-          document.createElement("div");
-
-        title.textContent =
-          "Стиль ответа";
-
-        title.style.marginBottom =
-          "9px";
-
-        box.appendChild(title);
-
-
-        const styles = [
-          ["normal","Обычный"],
-          ["short","Краткий"],
-          ["detailed","Подробный"]
-        ];
-
-
-        for (const [id,name] of styles) {
-
-          const btn =
-            document.createElement("button");
-
-          btn.className =
-            "modelOption" +
-            (
-              S.style === id
-                ? " selected"
-                : ""
-            );
-
-          btn.innerHTML = `
-            <span>${name}</span>
-            <span>${S.style === id ? "✓" : ""}</span>
-          `;
-
-          btn.onclick = async () => {
-
-            try {
-
-              await api(
-                "/api/settings",
-                {
-                  method:"POST",
-                  body:JSON.stringify({
-                    style:id
-                  })
-                }
-              );
-
-              S.style = id;
-
-              openSettings();
-
-            } catch (e) {
-
-              toast(e.message);
-            }
-          };
-
-          box.appendChild(btn);
-        }
-      }
-    );
-  }
-
-
-  function openStats() {
-
-    const requests =
-      Object.values(S.chats)
-        .reduce(
-          (sum,c) =>
-            sum + Number(c.requests || 0),
-          0
-        );
-
-    openSheet(
-      "📊 Статистика",
-      box => {
-
-        addStat(
-          box,
-          requests,
-          "Запросов"
-        );
-
-        addStat(
-          box,
-          Object.keys(S.chats).length,
-          "Чатов"
-        );
-      }
-    );
-  }
-
-
-  function addStat(
-    box,
-    value,
-    label
-  ) {
-
-    const el =
-      document.createElement("div");
-
-    el.className = "statBox";
-
-    el.innerHTML = `
-      <div class="statValue">${escapeHtml(value)}</div>
-      <div class="statLabel">${escapeHtml(label)}</div>
-    `;
-
-    box.appendChild(el);
-  }
-
-
-  function openMemory() {
-
-    openSheet(
-      "💾 Память",
-      box => {
-
-        const memory =
-          S._memory || {};
-
-        const keys =
-          Object.keys(memory);
-
-        if (!keys.length) {
-
-          const empty =
-            document.createElement("div");
-
-          empty.className = "statBox";
-
-          empty.textContent =
-            "Память пока пустая.";
-
-          box.appendChild(empty);
-
-        } else {
-
-          for (const key of keys) {
-
-            const el =
-              document.createElement("div");
-
-            el.className = "statBox";
-
-            el.innerHTML = `
-              <strong>${escapeHtml(key)}</strong>
-              <div class="chatMeta">
-                ${escapeHtml(
-                  String(memory[key])
-                )}
-              </div>
-            `;
-
-            box.appendChild(el);
-          }
-        }
-
-
-        const clear =
-          document.createElement("button");
-
-        clear.className =
-          "sheetBtn danger";
-
-        clear.textContent =
-          "Очистить память";
-
-        clear.onclick = async () => {
-
-          try {
-
-            const data =
-              await api(
-                "/api/memory/clear",
-                {
-                  method:"POST",
-                  body:JSON.stringify({})
-                }
-              );
-
-            if (data.state) {
-              applyState(data.state);
-            }
-
-            S._memory = {};
-
-            openMemory();
-
-          } catch (e) {
-
-            toast(e.message);
-          }
-        };
-
-        box.appendChild(clear);
-      }
-    );
-  }
-
-
-  $("attach").onclick =
-    () => file.click();
-
-
-  file.onchange =
-    () => chooseImage(
-      file.files?.[0]
-    );
-
-
-  $("removePhoto").onclick =
-    removeImage;
-
-
-  $("modelButton").onclick =
-    renderModels;
-
-
-  $("newChat").onclick =
-    createChat;
-
-
-  overlay.onclick =
-    e => {
-
-      if (e.target === overlay) {
-        closeSheet();
-      }
-    };
-
-
-  send.onclick =
-    sendMessage;
-
-
-  input.addEventListener(
-    "input",
-    autoResize
-  );
-
-
-  input.addEventListener(
-    "keydown",
-    e => {
-
-      if (
-        e.key === "Enter" &&
-        !e.shiftKey
-      ) {
-
-        e.preventDefault();
-
-        sendMessage();
-      }
-    }
-  );
-
-
-  document
-    .querySelectorAll(".suggestion")
-    .forEach(button => {
-
-      button.onclick = () => {
-
-        input.value =
-          button.dataset.suggestion || "";
-
-        autoResize();
-
-        input.focus();
-
-        haptic("light");
-      };
-    });
-
-
-  /*
-   * Дополнительное меню по долгому нажатию
-   * на логотип.
-   */
-  let pressTimer;
-
-  $("logo").addEventListener(
-    "touchstart",
-    () => {
-
-      pressTimer =
-        setTimeout(
-          () => {
-            openChats();
-          },
-          550
-        );
-    },
-    {passive:true}
-  );
-
-  $("logo").addEventListener(
-    "touchend",
-    () => {
-      clearTimeout(pressTimer);
-    }
-  );
-
-
-  /*
-   * Загружаем память из state,
-   * если сервер её возвращает.
-   */
-  const oldApplyState =
-    applyState;
-
-  window.__bulbaApplyState =
-    state => {
-
-      oldApplyState(state);
-
-      S._memory =
-        state?.memory || {};
-    };
-
-
-  boot();
+"use strict";
+
+const tg = window.Telegram?.WebApp;
+
+const $ = id => document.getElementById(id);
+
+const chat = $("chat");
+const messages = $("messages");
+const welcome = $("welcome");
+const input = $("input");
+const send = $("send");
+const file = $("file");
+const preview = $("preview");
+const previewImage = $("previewImage");
+const overlay = $("overlay");
+const sheetTitle = $("sheetTitle");
+const sheetContent = $("sheetContent");
+const toastBox = $("toast");
+
+const S = {
+model:"auto",
+style:"normal",
+activeChat:"main",
+chats:[],
+memory:{},
+requests:0,
+errors:0,
+models:[],
+image:null,
+sending:false,
+booted:false
+};
+
+function haptic(type="light"){
+try{
+if(tg?.HapticFeedback){
+if(type==="medium") tg.HapticFeedback.impactOccurred("medium");
+else if(type==="heavy") tg.HapticFeedback.impactOccurred("heavy");
+else tg.HapticFeedback.impactOccurred("light");
+}
+}catch(e){}
+}
+
+function toast(text){
+toastBox.textContent=String(text||"");
+toastBox.classList.add("show");
+clearTimeout(toast._timer);
+toast._timer=setTimeout(
+()=>toastBox.classList.remove("show"),
+2600
+);
+}
+
+function initData(){
+return tg?.initData||"";
+}
+
+function api(path,options={}){
+const controller=new AbortController();
+const timeout=setTimeout(
+()=>controller.abort(),
+options.timeout||30000
+);
+
+const headers={
+"Content-Type":"application/json",
+"X-Telegram-Init-Data":initData(),
+...(options.headers||{})
+};
+
+return fetch(path,{
+...options,
+headers,
+signal:controller.signal
+})
+.then(async response=>{
+clearTimeout(timeout);
+
+let data=null;
+
+try{
+data=await response.json();
+}catch(e){
+throw new Error(
+"Сервер вернул некорректный ответ."
+);
+}
+
+if(!response.ok||data?.ok===false){
+throw new Error(
+data?.error||
+`Ошибка сервера: ${response.status}`
+);
+}
+
+return data;
+})
+.catch(error=>{
+clearTimeout(timeout);
+throw error;
+});
+}
+
+function escapeHtml(value){
+return String(value??"")
+.replace(/&/g,"&amp;")
+.replace(/</g,"&lt;")
+.replace(/>/g,"&gt;")
+.replace(/"/g,"&quot;")
+.replace(/'/g,"&#039;");
+}
+
+function renderMarkdown(text){
+let s=escapeHtml(text||"");
+
+const blocks=[];
+
+s=s.replace(
+/```([\s\S]*?)```/g,
+(_,code)=>{
+const token=`@@CODEBLOCK${blocks.length}@@`;
+blocks.push(
+`<pre><code>${code.trim()}</code></pre>`
+);
+return token;
+}
+);
+
+s=s.replace(
+/`([^`\n]+)`/g,
+"<code>$1</code>"
+);
+
+s=s.replace(
+/\*\*([^*]+)\*\*/g,
+"<strong>$1</strong>"
+);
+
+s=s.replace(
+/\*([^*\n]+)\*/g,
+"<em>$1</em>"
+);
+
+s=s.replace(
+/^### (.+)$/gm,
+"<h3>$1</h3>"
+);
+
+s=s.replace(
+/^## (.+)$/gm,
+"<h2>$1</h2>"
+);
+
+s=s.replace(
+/^# (.+)$/gm,
+"<h1>$1</h1>"
+);
+
+s=s.replace(
+/^\s*[-•]\s+(.+)$/gm,
+"<li>$1</li>"
+);
+
+s=s.replace(
+/(<li>.*<\/li>)/gs,
+"<ul>$1</ul>"
+);
+
+s=s.replace(
+/\n{2,}/g,
+"</p><p>"
+);
+
+s=s.replace(
+/\n/g,
+"<br>"
+);
+
+s="<p>"+s+"</p>";
+
+s=s.replace(
+/<p>(@@CODEBLOCK\d+@@)<\/p>/g,
+"$1"
+);
+
+s=s.replace(
+/@@CODEBLOCK(\d+)@@/g,
+(_,i)=>blocks[Number(i)]
+);
+
+return s;
+}
+
+function renderMessage(
+role,
+text,
+image=null
+){
+const row=document.createElement("div");
+row.className=`messageRow ${role}`;
+
+const bubble=document.createElement("div");
+bubble.className="bubble";
+
+if(image){
+const img=document.createElement("img");
+img.className="photo";
+img.src=image;
+img.alt="Изображение";
+bubble.appendChild(img);
+}
+
+if(text){
+if(role==="assistant"){
+const md=document.createElement("div");
+md.className="md";
+md.innerHTML=renderMarkdown(text);
+bubble.appendChild(md);
+}else{
+const textNode=document.createElement("div");
+textNode.textContent=text;
+bubble.appendChild(textNode);
+}
+}
+
+if(role==="assistant"&&text){
+const copy=document.createElement("button");
+copy.className="copyBtn";
+copy.textContent="Скопировать";
+copy.onclick=async()=>{
+try{
+await navigator.clipboard.writeText(text);
+copy.textContent="Скопировано ✓";
+setTimeout(
+()=>copy.textContent="Скопировать",
+1400
+);
+haptic("light");
+}catch(e){
+toast("Не удалось скопировать.");
+}
+};
+bubble.appendChild(copy);
+}
+
+row.appendChild(bubble);
+messages.appendChild(row);
+
+scrollBottom();
+}
+
+function scrollBottom(){
+requestAnimationFrame(()=>{
+chat.scrollTop=chat.scrollHeight;
+});
+}
+
+function typing(show){
+const old=$("typing");
+
+if(!show){
+if(old) old.remove();
+return;
+}
+
+if(old)return;
+
+const row=document.createElement("div");
+row.id="typing";
+row.className="messageRow assistant";
+
+row.innerHTML=`
+<div class="typing">
+<span></span>
+<span></span>
+<span></span>
+</div>
+`;
+
+messages.appendChild(row);
+scrollBottom();
+}
+
+function renderHistory(){
+messages.innerHTML="";
+
+const current=S.chats.find(
+c=>String(c.id)===String(S.activeChat)
+);
+
+if(!current||!current.messages?.length){
+welcome.style.display="flex";
+return;
+}
+
+welcome.style.display="none";
+
+for(const message of current.messages){
+renderMessage(
+message.role,
+message.content||"",
+null
+);
+}
+}
+
+function applyState(state){
+if(!state)return;
+
+S.model=state.model||"auto";
+S.style=state.style||"normal";
+S.activeChat=String(
+state.active_chat||"main"
+);
+S.chats=Array.isArray(state.chats)
+?state.chats
+:[];
+S.memory=state.memory||{};
+S.requests=Number(state.requests||0);
+S.errors=Number(state.errors||0);
+
+updateModelName();
+renderHistory();
+updateSend();
+}
+
+function updateModelName(){
+let name=S.model;
+
+if(name==="auto"){
+name="Auto";
+}
+
+$("modelName").textContent=name;
+}
+
+function resize(){
+input.style.height="auto";
+input.style.height=
+Math.min(
+input.scrollHeight,
+150
+)+"px";
+}
+
+function updateSend(){
+send.disabled=
+S.sending||
+(
+!input.value.trim()&&
+!S.image
+);
+}
+
+function openSheet(title,html){
+sheetTitle.textContent=title;
+sheetContent.innerHTML=html;
+overlay.classList.add("show");
+}
+
+function closeSheet(){
+overlay.classList.remove("show");
+}
+
+function modelSheet(){
+let html=`
+<div class="sheetSub">
+Выбери модель или оставь Auto.
+</div>
+`;
+
+html+=`
+<button
+class="modelOption ${S.model==="auto"?"selected":""}"
+data-model="auto"
+>
+<div class="itemLeft">
+<div class="itemTitle">⚡ Auto</div>
+<div class="itemMeta">Bulba AI выберет доступную модель</div>
+</div>
+<span class="check">${S.model==="auto"?"✓":""}</span>
+</button>
+`;
+
+for(const model of S.models){
+const id=String(model.id||"");
+
+html+=`
+<button
+class="modelOption ${S.model===id?"selected":""}"
+data-model="${escapeHtml(id)}"
+>
+<div class="itemLeft">
+<div class="itemTitle">${escapeHtml(model.name||id)}</div>
+<div class="itemMeta">${escapeHtml(id)}</div>
+</div>
+<span class="check">${S.model===id?"✓":""}</span>
+</button>
+`;
+}
+
+openSheet(
+"🧠 Модель",
+html
+);
+
+sheetContent
+.querySelectorAll("[data-model]")
+.forEach(button=>{
+button.onclick=async()=>{
+try{
+const m=button.dataset.model;
+
+const d=await api(
+"/api/settings",
+{
+method:"POST",
+body:JSON.stringify({
+model:m
+})
+}
+);
+
+applyState(d.state);
+closeSheet();
+haptic("light");
+
+}catch(e){
+toast(e.message);
+}
+};
+});
+}
+
+function chatsSheet(){
+let html=`
+<button class="rowBtn" id="sheetNewChat">
+<span class="itemTitle">＋ Новый чат</span>
+<span>›</span>
+</button>
+`;
+
+if(!S.chats.length){
+html+=`
+<div class="sheetSub">
+Чатов пока нет.
+</div>
+`;
+}
+
+for(const c of S.chats){
+
+html+=`
+<div
+class="chatItem ${String(c.id)===String(S.activeChat)?"selected":""}"
+data-chat="${escapeHtml(c.id)}"
+>
+<div class="itemLeft">
+<div class="itemTitle">
+${escapeHtml(c.title||"Новый чат")}
+</div>
+<div class="itemMeta">
+${Number(c.requests||0)} запросов
+</div>
+</div>
+<span>›</span>
+</div>
+`;
+}
+
+openSheet(
+"💬 Чаты",
+html
+);
+
+$("sheetNewChat").onclick=()=>{
+newChat(true);
+};
+
+sheetContent
+.querySelectorAll("[data-chat]")
+.forEach(el=>{
+el.onclick=()=>{
+chatActions(
+el.dataset.chat
+);
+};
+});
+}
+
+function chatActions(id){
+const c=S.chats.find(
+x=>String(x.id)===String(id)
+);
+
+if(!c)return;
+
+openSheet(
+c.title||"Чат",
+`
+<div class="sheetSub">
+Управление чатом
+</div>
+
+<button class="rowBtn" id="selectChat">
+<span>Открыть</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn" id="renameChat">
+<span>✏️ Переименовать</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn" id="clearChat">
+<span>🧹 Очистить историю</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn danger" id="deleteChat">
+<span>🗑 Удалить чат</span>
+<span>›</span>
+</button>
+`
+);
+
+$("selectChat").onclick=async()=>{
+try{
+
+const d=await api(
+"/api/chat/select",
+{
+method:"POST",
+body:JSON.stringify({
+chat_id:id
+})
+}
+);
+
+applyState(d.state);
+closeSheet();
+haptic("light");
+
+}catch(e){
+toast(e.message);
+}
+};
+
+$("renameChat").onclick=()=>{
+renameChat(id);
+};
+
+$("clearChat").onclick=()=>{
+clearChatHistory(id);
+};
+
+$("deleteChat").onclick=()=>{
+deleteChat(id);
+};
+}
+
+async function newChat(){
+if(S.sending)return;
+
+try{
+
+const d=await api(
+"/api/chat/new",
+{
+method:"POST",
+body:"{}"
+}
+);
+
+applyState(d.state);
+closeSheet();
+
+haptic("medium");
+
+input.focus();
+
+}catch(e){
+toast(e.message);
+}
+}
+
+async function clearChatHistory(
+id=S.activeChat
+){
+if(!confirm(
+"Очистить историю этого чата?"
+)){
+return;
+}
+
+try{
+
+const d=await api(
+"/api/chat/clear",
+{
+method:"POST",
+body:JSON.stringify({
+chat_id:id
+})
+}
+);
+
+applyState(d.state);
+closeSheet();
+
+haptic("light");
+
+}catch(e){
+toast(e.message);
+}
+}
+
+async function deleteChat(id){
+if(!confirm(
+"Удалить этот чат?"
+)){
+return;
+}
+
+try{
+
+const d=await api(
+"/api/chat/delete",
+{
+method:"POST",
+body:JSON.stringify({
+chat_id:id
+})
+}
+);
+
+applyState(d.state);
+closeSheet();
+
+haptic("medium");
+
+}catch(e){
+toast(e.message);
+}
+}
+
+async function renameChat(id){
+const c=S.chats.find(
+x=>String(x.id)===String(id)
+);
+
+const current=c?.title||"";
+
+openSheet(
+"Переименовать чат",
+`
+<input
+class="textInput"
+id="renameInput"
+maxlength="60"
+value="${escapeHtml(current)}"
+placeholder="Название чата"
+>
+
+<button class="rowBtn" id="saveRename">
+<span class="itemTitle">Сохранить</span>
+<span>✓</span>
+</button>
+`
+);
+
+const ri=$("renameInput");
+
+ri.focus();
+ri.select();
+
+$("saveRename").onclick=async()=>{
+
+const title=ri.value.trim();
+
+if(!title){
+toast(
+"Название не может быть пустым."
+);
+return;
+}
+
+try{
+
+const d=await api(
+"/api/chat/rename",
+{
+method:"POST",
+body:JSON.stringify({
+chat_id:id,
+title
+})
+}
+);
+
+applyState(d.state);
+closeSheet();
+
+haptic("light");
+
+}catch(e){
+toast(e.message);
+}
+};
+}
+
+function styleSheet(){
+
+const values=[
+[
+"normal",
+"🧠 Обычно",
+"Нормальный баланс"
+],
+[
+"short",
+"⚡ Кратко",
+"Минимум лишнего"
+],
+[
+"detailed",
+"📚 Подробно",
+"Больше объяснений"
+]
+];
+
+let html=`
+<div class="sheetSub">
+Стиль применяется к новым ответам.
+</div>
+`;
+
+for(const [
+id,
+name,
+description
+] of values){
+
+html+=`
+<button
+class="styleOption ${S.style===id?"selected":""}"
+data-style="${id}"
+>
+<div class="itemLeft">
+<div class="itemTitle">${name}</div>
+<div class="itemMeta">${description}</div>
+</div>
+
+<span class="check">
+${S.style===id?"✓":""}
+</span>
+</button>
+`;
+}
+
+openSheet(
+"⚙️ Стиль ответа",
+html
+);
+
+sheetContent
+.querySelectorAll("[data-style]")
+.forEach(button=>{
+
+button.onclick=async()=>{
+
+try{
+
+const d=await api(
+"/api/settings",
+{
+method:"POST",
+body:JSON.stringify({
+style:button.dataset.style
+})
+}
+);
+
+applyState(d.state);
+closeSheet();
+
+haptic("light");
+
+}catch(e){
+toast(e.message);
+}
+
+};
+
+});
+}
+
+function memorySheet(){
+
+let html=`
+<div class="sheetSub">
+Память используется моделью,
+когда информация относится к запросу.
+</div>
+`;
+
+const entries=Object.entries(
+S.memory||{}
+);
+
+if(entries.length){
+
+for(const [
+key,
+value
+] of entries){
+
+html+=`
+<div class="memoryItem">
+<div class="memoryKey">
+${escapeHtml(key)}
+</div>
+
+<div class="memoryValue">
+${escapeHtml(value)}
+</div>
+</div>
+`;
+}
+
+}else{
+
+html+=`
+<div class="sheetSub">
+Память пуста.
+</div>
+`;
+}
+
+html+=`
+<input
+class="textInput"
+id="memKey"
+placeholder="Например: Цель"
+maxlength="80"
+>
+
+<input
+class="textInput"
+id="memValue"
+placeholder="Значение"
+maxlength="500"
+>
+
+<button
+class="rowBtn"
+id="saveMemory"
+>
+<span class="itemTitle">
+＋ Добавить в память
+</span>
+<span>✓</span>
+</button>
+`;
+
+if(entries.length){
+
+html+=`
+<button
+class="rowBtn danger"
+id="clearMemory"
+>
+<span>🗑 Очистить память</span>
+<span>›</span>
+</button>
+`;
+}
+
+openSheet(
+"💾 Память",
+html
+);
+
+$("saveMemory").onclick=async()=>{
+
+const key=$("memKey").value.trim();
+const value=$("memValue").value.trim();
+
+if(!key||!value){
+toast(
+"Заполни название и значение."
+);
+return;
+}
+
+try{
+
+const d=await api(
+"/api/memory",
+{
+method:"POST",
+body:JSON.stringify({
+action:"set",
+key,
+value
+})
+}
+);
+
+applyState(d.state);
+
+memorySheet();
+
+haptic("light");
+
+}catch(e){
+toast(e.message);
+}
+};
+
+const clear=$("clearMemory");
+
+if(clear){
+
+clear.onclick=async()=>{
+
+if(!confirm(
+"Очистить всю память?"
+)){
+return;
+}
+
+try{
+
+const d=await api(
+"/api/memory",
+{
+method:"POST",
+body:JSON.stringify({
+action:"clear"
+})
+}
+);
+
+applyState(d.state);
+
+memorySheet();
+
+haptic("medium");
+
+}catch(e){
+toast(e.message);
+}
+};
+
+}
+}
+
+async function statsSheet(){
+
+try{
+
+const d=await api(
+"/api/stats",
+{
+method:"POST",
+body:"{}"
+}
+);
+
+const s=d.stats||{};
+
+openSheet(
+"📊 Статистика",
+`
+<div class="memoryItem">
+<div class="memoryKey">
+Твои запросы
+</div>
+<div class="memoryValue">
+${Number(s.requests||0)}
+</div>
+</div>
+
+<div class="memoryItem">
+<div class="memoryKey">
+Ошибки
+</div>
+<div class="memoryValue">
+${Number(s.errors||0)}
+</div>
+</div>
+
+<div class="memoryItem">
+<div class="memoryKey">
+Чатов
+</div>
+<div class="memoryValue">
+${Number(s.chats||0)}
+</div>
+</div>
+
+<div class="memoryItem">
+<div class="memoryKey">
+Всего запросов
+</div>
+<div class="memoryValue">
+${Number(s.total_requests||0)}
+</div>
+</div>
+
+<div class="memoryItem">
+<div class="memoryKey">
+Версия
+</div>
+<div class="memoryValue">
+${escapeHtml(s.version||"")}
+</div>
+</div>
+`
+);
+
+}catch(e){
+toast(e.message);
+}
+}
+
+function settingsSheet(){
+
+openSheet(
+"⚙️ Настройки",
+`
+<button class="rowBtn" id="styleBtn">
+<span class="itemTitle">
+Стиль ответа
+</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn" id="memoryBtn">
+<span class="itemTitle">
+💾 Память
+</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn" id="statsBtn">
+<span class="itemTitle">
+📊 Статистика
+</span>
+<span>›</span>
+</button>
+`
+);
+
+$("styleBtn").onclick=styleSheet;
+$("memoryBtn").onclick=memorySheet;
+$("statsBtn").onclick=statsSheet;
+}
+
+async function resizeImage(fileObject){
+
+if(
+!("createImageBitmap" in window)
+){
+return fallbackImage(
+fileObject
+);
+}
+
+const bitmap=
+await createImageBitmap(
+fileObject
+);
+
+const max=1600;
+
+let width=bitmap.width;
+let height=bitmap.height;
+
+if(
+width>max||
+height>max
+){
+
+const scale=Math.min(
+max/width,
+max/height
+);
+
+width=Math.round(
+width*scale
+);
+
+height=Math.round(
+height*scale
+);
+}
+
+const canvas=
+document.createElement(
+"canvas"
+);
+
+canvas.width=width;
+canvas.height=height;
+
+const ctx=canvas.getContext(
+"2d"
+);
+
+ctx.drawImage(
+bitmap,
+0,
+0,
+width,
+height
+);
+
+if(bitmap.close){
+bitmap.close();
+}
+
+return canvas.toDataURL(
+"image/jpeg",
+0.82
+);
+}
+
+function fallbackImage(
+fileObject
+){
+
+return new Promise(
+(resolve,reject)=>{
+
+const reader=
+new FileReader();
+
+reader.onload=()=>{
+
+const image=
+new Image();
+
+image.onload=()=>{
+
+const max=1600;
+
+const scale=Math.min(
+1,
+max/image.width,
+max/image.height
+);
+
+const canvas=
+document.createElement(
+"canvas"
+);
+
+canvas.width=
+Math.round(
+image.width*scale
+);
+
+canvas.height=
+Math.round(
+image.height*scale
+);
+
+const ctx=
+canvas.getContext("2d");
+
+ctx.drawImage(
+image,
+0,
+0,
+canvas.width,
+canvas.height
+);
+
+resolve(
+canvas.toDataURL(
+"image/jpeg",
+0.82
+)
+);
+};
+
+image.onerror=reject;
+
+image.src=reader.result;
+};
+
+reader.onerror=reject;
+
+reader.readAsDataURL(
+fileObject
+);
+
+});
+}
+
+async function chooseImage(
+fileObject
+){
+
+if(!fileObject){
+return;
+}
+
+if(
+!fileObject.type.startsWith(
+"image/"
+)
+){
+
+toast(
+"Выбери изображение."
+);
+
+return;
+}
+
+if(
+fileObject.size>
+8*1024*1024
+){
+
+toast(
+"Фото слишком большое. Максимум 8 МБ."
+);
+
+return;
+}
+
+try{
+
+S.image=
+await resizeImage(
+fileObject
+);
+
+previewImage.src=S.image;
+
+preview.classList.add(
+"show"
+);
+
+updateSend();
+
+haptic("light");
+
+}catch(error){
+
+console.error(error);
+
+toast(
+"Не удалось обработать фото."
+);
+}
+}
+
+function removeImage(){
+
+S.image=null;
+
+previewImage.src="";
+
+preview.classList.remove(
+"show"
+);
+
+file.value="";
+
+updateSend();
+}
+
+async function sendMessage(){
+
+if(S.sending){
+return;
+}
+
+const text=
+input.value.trim();
+
+if(
+!text&&!S.image
+){
+return;
+}
+
+S.sending=true;
+
+updateSend();
+
+const image=S.image;
+
+input.value="";
+
+resize();
+
+removeImage();
+
+renderMessage(
+"user",
+text||"",
+image
+);
+
+typing(true);
+
+try{
+
+const data=
+await api(
+"/api/chat",
+{
+method:"POST",
+body:JSON.stringify({
+message:text,
+model:S.model,
+chat_id:S.activeChat,
+image
+}),
+timeout:100000
+}
+);
+
+typing(false);
+
+renderMessage(
+"assistant",
+data.answer||""
+);
+
+applyState(
+data.state
+);
+
+haptic("light");
+
+}catch(error){
+
+typing(false);
+
+let message=
+error?.message||
+"Неизвестная ошибка.";
+
+if(
+error?.name==="AbortError"
+){
+message=
+"Сервер слишком долго не отвечает.";
+}
+
+renderMessage(
+"assistant",
+"❌ Ошибка: "+message
+);
+
+haptic("heavy");
+
+}finally{
+
+S.sending=false;
+
+updateSend();
+
+input.focus();
+}
+}
+
+async function boot(){
+
+if(!initData()){
+
+$("statusText").textContent=
+"Открой через Telegram";
+
+toast(
+"Открой Bulba AI через Telegram."
+);
+
+return;
+}
+
+try{
+
+const [
+stateResponse,
+modelsResponse
+]=await Promise.all([
+api("/api/state"),
+api("/api/models")
+]);
+
+S.models=
+Array.isArray(
+modelsResponse.models
+)
+?modelsResponse.models
+:[];
+
+applyState(
+stateResponse.state
+);
+
+S.booted=true;
+
+$("statusText").textContent=
+"Online";
+
+}catch(error){
+
+console.error(error);
+
+$("statusText").textContent=
+"Ошибка";
+
+toast(
+error.message||
+"Не удалось подключиться."
+);
+}
+}
+
+$("attach").onclick=()=>{
+file.click();
+};
+
+file.onchange=()=>{
+chooseImage(
+file.files?.[0]
+);
+};
+
+$("removePhoto").onclick=
+removeImage;
+
+$("modelButton").onclick=
+modelSheet;
+
+$("newChat").onclick=
+newChat;
+
+send.onclick=
+sendMessage;
+
+input.addEventListener(
+"input",
+()=>{
+resize();
+updateSend();
+}
+);
+
+input.addEventListener(
+"keydown",
+event=>{
+
+if(
+event.key==="Enter"&&
+!event.shiftKey
+){
+
+event.preventDefault();
+
+sendMessage();
+}
+}
+);
+
+overlay.onclick=event=>{
+
+if(
+event.target===overlay
+){
+closeSheet();
+}
+};
+
+document
+.querySelectorAll(
+".suggestion"
+)
+.forEach(button=>{
+
+button.onclick=()=>{
+
+input.value=
+button.dataset.suggestion||"";
+
+resize();
+
+updateSend();
+
+input.focus();
+
+haptic("light");
+};
+});
+
+document
+.querySelector(".brand")
+.onclick=()=>{
+
+openSheet(
+"Bulba AI",
+`
+<button class="rowBtn" id="allChats">
+<span>💬 Чаты</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn" id="newFromMenu">
+<span>＋ Новый чат</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn" id="styleFromMenu">
+<span>⚙️ Настройки</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn" id="memoryFromMenu">
+<span>💾 Память</span>
+<span>›</span>
+</button>
+
+<button class="rowBtn" id="statsFromMenu">
+<span>📊 Статистика</span>
+<span>›</span>
+</button>
+`
+);
+
+setTimeout(()=>{
+
+$("allChats").onclick=
+chatsSheet;
+
+$("newFromMenu").onclick=
+newChat;
+
+$("styleFromMenu").onclick=
+settingsSheet;
+
+$("memoryFromMenu").onclick=
+memorySheet;
+
+$("statsFromMenu").onclick=
+statsSheet;
+
+},0);
+};
+
+if(tg){
+
+try{
+tg.ready();
+tg.expand();
+
+if(tg.disableVerticalSwipes){
+tg.disableVerticalSwipes();
+}
+
+}catch(e){}
+}
+
+boot();
 
 })();
 </script>
-
 </body>
 </html>
