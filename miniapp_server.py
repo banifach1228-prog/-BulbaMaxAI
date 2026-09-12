@@ -4,8 +4,10 @@ import time
 import hmac
 import hashlib
 import urllib.parse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import bot
 
@@ -18,34 +20,101 @@ MAX_MESSAGE = 12000
 MAX_IMAGE_BASE64 = 10 * 1024 * 1024
 AUTH_MAX_AGE = 24 * 60 * 60
 
-STYLE_VALUES = {"normal", "short", "detailed"}
+STYLE_VALUES = {
+    "normal",
+    "short",
+    "detailed",
+}
 
 ROOT = Path(__file__).resolve().parent
 MINIAPP_FILE = ROOT / "miniapp" / "index.html"
 
 
+# ============================================================
+# LOCKS
+# ============================================================
+
+_user_locks = {}
+_user_locks_guard = threading.Lock()
+
+
+def get_user_lock(user_id):
+    uid = str(user_id)
+
+    with _user_locks_guard:
+        if uid not in _user_locks:
+            _user_locks[uid] = threading.RLock()
+
+        return _user_locks[uid]
+
+
+# ============================================================
+# HTTP HELPERS
+# ============================================================
+
 def send_json(handler, status, data):
     body = json.dumps(
         data,
         ensure_ascii=False,
-        separators=(",", ":"),
     ).encode("utf-8")
 
     handler.send_response(status)
+
     handler.send_header(
         "Content-Type",
         "application/json; charset=utf-8",
     )
-    handler.send_header(
-        "Cache-Control",
-        "no-store",
-    )
+
     handler.send_header(
         "Content-Length",
         str(len(body)),
     )
-    handler.end_headers()
 
+    handler.send_header(
+        "Cache-Control",
+        "no-store",
+    )
+
+    handler.send_header(
+        "X-Content-Type-Options",
+        "nosniff",
+    )
+
+    handler.send_header(
+        "Referrer-Policy",
+        "no-referrer",
+    )
+
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def send_html(handler, data):
+    body = data.encode("utf-8")
+
+    handler.send_response(200)
+
+    handler.send_header(
+        "Content-Type",
+        "text/html; charset=utf-8",
+    )
+
+    handler.send_header(
+        "Content-Length",
+        str(len(body)),
+    )
+
+    handler.send_header(
+        "Cache-Control",
+        "no-store",
+    )
+
+    handler.send_header(
+        "X-Content-Type-Options",
+        "nosniff",
+    )
+
+    handler.end_headers()
     handler.wfile.write(body)
 
 
@@ -57,881 +126,764 @@ def read_json(handler):
                 "0",
             )
         )
-    except ValueError as exc:
-        raise ValueError(
-            "Некорректный Content-Length."
-        ) from exc
+    except ValueError:
+        raise ValueError("Некорректный Content-Length.")
 
-    if length < 0 or length > MAX_BODY:
-        raise ValueError(
-            "Запрос слишком большой."
-        )
+    if length <= 0:
+        raise ValueError("Пустой запрос.")
 
-    if length == 0:
-        return {}
+    if length > MAX_BODY:
+        raise ValueError("Запрос слишком большой.")
+
+    raw = handler.rfile.read(length)
 
     try:
-        raw = handler.rfile.read(length)
         data = json.loads(
             raw.decode("utf-8")
         )
-    except Exception as exc:
-        raise ValueError(
-            "Некорректный JSON."
-        ) from exc
+    except Exception:
+        raise ValueError("Некорректный JSON.")
 
     if not isinstance(data, dict):
-        raise ValueError(
-            "JSON должен быть объектом."
-        )
+        raise ValueError("JSON должен быть объектом.")
 
     return data
 
 
+# ============================================================
+# TELEGRAM WEB APP AUTH
+# ============================================================
+
 def validate_init_data(init_data):
     if not init_data:
-        raise ValueError(
-            "Открой Bulba AI через Telegram."
-        )
-
-    token = os.getenv(
-        "BOT_TOKEN",
-        "",
-    ).strip()
-
-    if not token:
-        raise RuntimeError(
-            "BOT_TOKEN не установлен."
-        )
-
-    parsed = urllib.parse.parse_qs(
-        init_data,
-        keep_blank_values=True,
-    )
-
-    received_hash = parsed.get(
-        "hash",
-        [None],
-    )[0]
-
-    auth_date_raw = parsed.get(
-        "auth_date",
-        [None],
-    )[0]
-
-    if not received_hash:
-        raise ValueError(
-            "В Telegram initData отсутствует hash."
-        )
-
-    if not auth_date_raw:
-        raise ValueError(
-            "В Telegram initData отсутствует auth_date."
-        )
+        return None
 
     try:
+        parsed = urllib.parse.parse_qs(
+            init_data,
+            keep_blank_values=True,
+        )
+
+        received_hash = parsed.get("hash", [None])[0]
+
+        if not received_hash:
+            return None
+
+        auth_date_raw = parsed.get(
+            "auth_date",
+            [None],
+        )[0]
+
+        if not auth_date_raw:
+            return None
+
         auth_date = int(auth_date_raw)
-    except ValueError as exc:
-        raise ValueError(
-            "Некорректный auth_date."
-        ) from exc
 
-    if abs(
-        int(time.time()) - auth_date
-    ) > AUTH_MAX_AGE:
-        raise ValueError(
-            "Сессия Telegram устарела. "
-            "Перезапусти Mini App."
+        if abs(int(time.time()) - auth_date) > AUTH_MAX_AGE:
+            return None
+
+        pairs = []
+
+        for key, values in parsed.items():
+            if key == "hash":
+                continue
+
+            value = values[0] if values else ""
+
+            pairs.append(
+                f"{key}={value}"
+            )
+
+        pairs.sort()
+
+        data_check_string = "\n".join(pairs)
+
+        secret_key = hmac.new(
+            b"WebAppData",
+            bot.BOT_TOKEN.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+
+        calculated_hash = hmac.new(
+            secret_key,
+            data_check_string.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(
+            calculated_hash,
+            received_hash,
+        ):
+            return None
+
+        user_raw = parsed.get(
+            "user",
+            [None],
+        )[0]
+
+        if not user_raw:
+            return None
+
+        user_data = json.loads(user_raw)
+
+        if not isinstance(user_data, dict):
+            return None
+
+        user_id = user_data.get("id")
+
+        if not user_id:
+            return None
+
+        return user_data
+
+    except Exception as e:
+        print(
+            "Mini App auth error:",
+            repr(e),
         )
-
-    pairs = []
-
-    for key in sorted(parsed):
-        if key == "hash":
-            continue
-
-        pairs.append(
-            f"{key}={parsed[key][0]}"
-        )
-
-    data_check_string = "\n".join(
-        pairs
-    )
-
-    secret_key = hmac.new(
-        b"WebAppData",
-        token.encode("utf-8"),
-        hashlib.sha256,
-    ).digest()
-
-    calculated_hash = hmac.new(
-        secret_key,
-        data_check_string.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-
-    if not hmac.compare_digest(
-        calculated_hash,
-        received_hash,
-    ):
-        raise ValueError(
-            "Неверная подпись Telegram."
-        )
-
-    user_raw = parsed.get(
-        "user",
-        [None],
-    )[0]
-
-    if not user_raw:
-        raise ValueError(
-            "Telegram user отсутствует."
-        )
-
-    try:
-        tg_user = json.loads(
-            user_raw
-        )
-    except Exception as exc:
-        raise ValueError(
-            "Некорректные данные Telegram user."
-        ) from exc
-
-    if not tg_user.get("id"):
-        raise ValueError(
-            "Telegram user ID отсутствует."
-        )
-
-    return tg_user
+        return None
 
 
 def get_user_from_request(handler):
-    tg_user = validate_init_data(
-        handler.headers.get(
-            "X-Telegram-Init-Data",
+    init_data = handler.headers.get(
+        "X-Telegram-Init-Data",
+        "",
+    ).strip()
+
+    if not init_data:
+        init_data = handler.headers.get(
+            "X-Telegram-Init-Data-Raw",
             "",
         ).strip()
-    )
 
-    uid = str(
-        tg_user["id"]
-    )
-
-    user = bot.get_user(uid)
-
-    user["_user_id"] = uid
-
-    user["_telegram_user"] = {
-        "id": tg_user.get("id"),
-        "first_name": tg_user.get(
-            "first_name",
-            "",
-        ),
-        "last_name": tg_user.get(
-            "last_name",
-            "",
-        ),
-        "username": tg_user.get(
-            "username",
-            "",
-        ),
-        "language_code": tg_user.get(
-            "language_code",
-            "",
-        ),
-        "photo_url": tg_user.get(
-            "photo_url",
-            "",
-        ),
-    }
-
-    return user
+    return validate_init_data(init_data)
 
 
-def require_access(user):
-    if (
-        os.getenv(
-            "LICENSE_REQUIRED",
-            "0",
-        ).strip()
-        != "1"
-    ):
-        return True
+# ============================================================
+# ACCESS
+# ============================================================
 
-    uid = user.get(
-        "_user_id"
-    )
+def require_access(user_id):
+    if os.getenv(
+        "LICENSE_REQUIRED",
+        "0",
+    ).strip() != "1":
+        return True, ""
 
-    if not uid:
-        return False
+    if bot.is_admin(user_id):
+        return True, ""
 
-    try:
-        if bot.is_admin(uid):
-            return True
-    except Exception:
-        pass
+    return bot.user_has_access(user_id)
 
-    try:
-        return bool(
-            bot.user_has_access(uid)
-        )
-    except Exception:
-        return False
 
+# ============================================================
+# MODELS
+# ============================================================
 
 def model_list():
-    result = []
-    seen = set()
+    models = []
 
     for item in bot.get_models():
-        if not isinstance(
-            item,
-            dict,
-        ):
+        if not isinstance(item, dict):
             continue
 
-        mid = str(
-            item.get("id") or ""
-        ).strip()
+        model_id = item.get("id")
 
-        if (
-            not mid
-            or mid in seen
-            or bot.is_bad_model(mid)
-        ):
+        if not model_id:
             continue
 
-        seen.add(mid)
+        if bot.is_bad_model(model_id):
+            continue
 
-        result.append(
-            {
-                "id": mid,
-                "name": mid,
-            }
-        )
+        models.append({
+            "id": model_id,
+            "name": model_id,
+        })
 
-    return result
+    return models
 
 
 def validate_model(model):
-    model = (
-        "auto"
-        if model is None
-        else str(model).strip()
-    )
+    if not model or model == "auto":
+        return True
 
-    if model == "auto":
-        return "auto"
+    for item in model_list():
+        if item["id"] == model:
+            return True
 
-    available = {
-        item["id"]
-        for item in model_list()
-    }
-
-    if model not in available:
-        raise ValueError(
-            "Выбранная модель недоступна."
-        )
-
-    return model
+    return False
 
 
-def chat_title(chat_id, chat):
-    explicit = str(
-        chat.get("title") or ""
-    ).strip()
+# ============================================================
+# CHAT HELPERS
+# ============================================================
 
-    if explicit:
-        return explicit
+def chat_title(name):
+    name = str(name or "").strip()
 
-    prompt = str(
-        chat.get(
-            "last_prompt"
-        ) or ""
-    ).strip()
+    if not name:
+        return "Новый чат"
 
-    if prompt:
-        clean = " ".join(
-            prompt.split()
-        )
-
-        return (
-            clean[:42]
-            + (
-                "…"
-                if len(clean) > 42
-                else ""
-            )
-        )
-
-    if str(chat_id) == "main":
-        return "Главный чат"
-
-    return "Новый чат"
+    return name[:80]
 
 
-def frontend_state(user):
+def frontend_state(user_id, u):
     chats = []
 
-    for chat_id, chat in user.get(
-        "chats",
-        {},
-    ).items():
-
-        if not isinstance(
-            chat,
-            dict,
-        ):
-            continue
+    for name, chat in u["chats"].items():
+        history = chat.get(
+            "history",
+            [],
+        )
 
         messages = []
 
-        for item in chat.get(
-            "history",
-            [],
-        ):
-
-            if not isinstance(
-                item,
-                dict,
-            ):
+        for item in history:
+            if not isinstance(item, dict):
                 continue
 
-            role = item.get(
-                "role"
-            )
+            role = item.get("role")
 
             if role not in (
                 "user",
                 "assistant",
+                "system",
             ):
                 continue
 
-            messages.append(
-                {
-                    "role": role,
-                    "content": str(
-                        item.get(
-                            "content",
-                            "",
+            content = item.get(
+                "content",
+                "",
+            )
+
+            if isinstance(content, list):
+                text_parts = []
+
+                for part in content:
+                    if (
+                        isinstance(part, dict)
+                        and part.get("type") == "text"
+                    ):
+                        text_parts.append(
+                            str(part.get("text", ""))
                         )
-                        or ""
-                    ),
-                }
-            )
 
-        last_request = chat.get(
-            "last_request"
-        )
-
-        if isinstance(
-            last_request,
-            dict,
-        ):
-            last_request_value = int(
-                last_request.get(
-                    "ts",
-                    0,
+                content = "\n".join(
+                    text_parts
                 )
-                or 0
-            )
-        elif isinstance(
-            last_request,
-            (int, float),
-        ):
-            last_request_value = int(
-                last_request
-                or 0
-            )
-        else:
-            last_request_value = 0
 
-        chats.append(
-            {
-                "id": str(chat_id),
-                "title": chat_title(
-                    chat_id,
-                    chat,
-                ),
-                "messages": messages,
-                "requests": int(
-                    chat.get(
-                        "requests",
-                        0,
-                    )
-                    or 0
-                ),
-                "created": int(
-                    chat.get(
-                        "created",
-                        0,
-                    )
-                    or 0
-                ),
-                "last_request":
-                    last_request_value,
-            }
-        )
+            messages.append({
+                "role": role,
+                "content": str(content),
+            })
 
-    chats.sort(
-        key=lambda x: (
-            x["last_request"],
-            x["created"],
-        ),
-        reverse=True,
+        chats.append({
+            "id": name,
+            "name": chat_title(name),
+            "messages": messages,
+            "requests": int(
+                chat.get("requests", 0)
+            ),
+            "created": int(
+                chat.get("created", 0)
+            ),
+        })
+
+    memory = u.get(
+        "memory",
+        {},
     )
 
     return {
-        "model": user.get(
+        "user": {
+            "id": str(user_id),
+        },
+
+        "model": u.get(
             "model",
             "auto",
         ),
-        "style": user.get(
+
+        "style": u.get(
             "style",
             "normal",
         ),
-        "active_chat": str(
-            user.get(
-                "active_chat",
-                "main",
-            )
+
+        "active_chat": u.get(
+            "active_chat",
+            "main",
         ),
+
         "chats": chats,
-        "memory": user.get(
-            "memory",
-            {},
-        ),
+
+        "memory": memory,
+
         "requests": int(
-            user.get(
-                "requests",
-                0,
-            )
-            or 0
+            u.get("requests", 0)
         ),
+
         "errors": int(
-            user.get(
-                "errors",
-                0,
-            )
-            or 0
+            u.get("errors", 0)
         ),
-        "telegram_user": user.get(
-            "_telegram_user",
-            {},
-        ),
-        "version": getattr(
-            bot,
-            "BOT_VERSION",
-            "V16",
-        ),
+
+        "version": bot.BOT_VERSION,
     }
 
 
-def get_chat(
-    user,
-    chat_id=None,
-):
-    chat_id = str(
-        chat_id
-        or user.get(
-            "active_chat",
-            "main",
-        )
-    )
+def get_chat(u, chat_id=None):
+    if chat_id:
+        if chat_id not in u["chats"]:
+            return None
 
-    if chat_id not in user["chats"]:
-        raise ValueError(
-            "Чат не найден."
-        )
+        return u["chats"][chat_id]
 
-    return (
-        chat_id,
-        user["chats"][chat_id],
-    )
+    return bot.get_chat(u)
 
 
-def build_messages(
-    user,
-    chat,
-    current_content,
-):
+def build_messages(u, chat, user_text):
     messages = [
         {
             "role": "system",
-            "content": bot.style_system(
-                user
-            ),
+            "content": bot.style_system(u),
         }
     ]
 
-    for item in chat.get(
+    history = chat.get(
         "history",
         [],
-    )[-bot.MAX_HISTORY:]:
+    )
 
-        if not isinstance(
-            item,
-            dict,
+    for item in history[-bot.MAX_HISTORY:]:
+        if not isinstance(item, dict):
+            continue
+
+        role = item.get("role")
+
+        if role not in (
+            "user",
+            "assistant",
         ):
             continue
 
-        role = item.get(
-            "role"
-        )
-
         content = item.get(
-            "content"
+            "content",
+            "",
         )
 
-        if (
-            role in (
-                "user",
-                "assistant",
-            )
-            and content
-        ):
-            messages.append(
-                {
-                    "role": role,
-                    "content": content,
-                }
-            )
+        if not content:
+            continue
 
-    messages.append(
-        {
-            "role": "user",
-            "content": current_content,
-        }
-    )
+        messages.append({
+            "role": role,
+            "content": content,
+        })
+
+    messages.append({
+        "role": "user",
+        "content": user_text,
+    })
 
     return messages
 
 
-def make_image_content(
-    text,
-    image,
-):
-    if (
-        not isinstance(
-            image,
-            str,
-        )
-        or not image.startswith(
-            "data:image/"
-        )
-    ):
-        raise ValueError(
-            "Поддерживаются только изображения."
-        )
+# ============================================================
+# IMAGE
+# ============================================================
 
-    if len(image) > MAX_IMAGE_BASE64:
+def make_image_content(data_url, question):
+    if not isinstance(data_url, str):
+        raise ValueError("Некорректное изображение.")
+
+    if len(data_url) > MAX_IMAGE_BASE64:
         raise ValueError(
             "Изображение слишком большое."
+        )
+
+    if not data_url.startswith("data:image/"):
+        raise ValueError(
+            "Разрешены только изображения."
+        )
+
+    try:
+        header, encoded = data_url.split(
+            ",",
+            1,
+        )
+    except ValueError:
+        raise ValueError(
+            "Некорректный формат изображения."
+        )
+
+    if ";base64" not in header:
+        raise ValueError(
+            "Изображение должно быть base64."
+        )
+
+    mime = (
+        header[5:]
+        .split(";", 1)[0]
+        .strip()
+    )
+
+    allowed_mimes = {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+    }
+
+    if mime not in allowed_mimes:
+        raise ValueError(
+            "Этот формат изображения не поддерживается."
+        )
+
+    if not encoded:
+        raise ValueError(
+            "Пустое изображение."
+        )
+
+    try:
+        base64.b64decode(
+            encoded,
+            validate=True,
+        )
+    except Exception:
+        raise ValueError(
+            "Некорректный base64."
         )
 
     return [
         {
             "type": "text",
-            "text": (
-                text
-                or "Проанализируй изображение."
-            ),
+            "text": question,
         },
         {
             "type": "image_url",
             "image_url": {
-                "url": image
+                "url": data_url,
             },
         },
     ]
 
 
-def create_chat(user):
-    chat_id = str(
-        bot.new_chat(user)
-    )
+# ============================================================
+# CHAT MANAGEMENT
+# ============================================================
 
-    bot.save_db()
-
-    return chat_id
-
-
-def rename_chat(
-    user,
-    chat_id,
-    title,
-):
-    _, chat = get_chat(
-        user,
-        chat_id,
-    )
-
-    title = " ".join(
-        str(title or "").split()
+def create_chat(u, requested_name=None):
+    name = str(
+        requested_name or ""
     ).strip()
 
-    if not title:
+    if not name:
+        name = "Чат 1"
+
+    name = name[:60]
+
+    if name in u["chats"]:
+        base = name
+        index = 2
+
+        while f"{base} {index}" in u["chats"]:
+            index += 1
+
+        name = f"{base} {index}"
+
+    if len(u["chats"]) >= bot.MAX_CHATS:
+        candidates = [
+            (
+                int(
+                    chat.get(
+                        "created",
+                        0,
+                    )
+                ),
+                chat_name,
+            )
+            for chat_name, chat in u["chats"].items()
+            if chat_name != u["active_chat"]
+        ]
+
+        if candidates:
+            _, old_name = sorted(
+                candidates
+            )[0]
+
+            del u["chats"][old_name]
+
+    u["chats"][name] = bot.default_chat()
+    u["active_chat"] = name
+
+    return name
+
+
+def rename_chat(u, old_name, new_name):
+    if old_name not in u["chats"]:
+        raise ValueError(
+            "Чат не найден."
+        )
+
+    new_name = str(
+        new_name or ""
+    ).strip()
+
+    if not new_name:
         raise ValueError(
             "Название не может быть пустым."
         )
 
-    chat["title"] = (
-        title[:60].rstrip()
-    )
+    new_name = new_name[:60]
 
-    bot.save_db()
+    if new_name != old_name and new_name in u["chats"]:
+        raise ValueError(
+            "Чат с таким названием уже существует."
+        )
+
+    if new_name == old_name:
+        return old_name
+
+    chat = u["chats"].pop(old_name)
+    u["chats"][new_name] = chat
+
+    if u["active_chat"] == old_name:
+        u["active_chat"] = new_name
+
+    return new_name
 
 
-def delete_chat(
-    user,
-    chat_id,
-):
-    chat_id = str(chat_id)
+def delete_chat(u, chat_id):
+    if chat_id not in u["chats"]:
+        raise ValueError(
+            "Чат не найден."
+        )
 
-    get_chat(
-        user,
+    if len(u["chats"]) <= 1:
+        raise ValueError(
+            "Нельзя удалить последний чат."
+        )
+
+    del u["chats"][chat_id]
+
+    if u["active_chat"] == chat_id:
+        u["active_chat"] = next(
+            iter(u["chats"])
+        )
+
+
+def clear_chat(u, chat_id):
+    chat = get_chat(
+        u,
         chat_id,
     )
 
-    if len(
-        user["chats"]
-    ) <= 1:
-
-        user["chats"] = {
-            "main": bot.default_chat()
-        }
-
-        user["active_chat"] = "main"
-
-    else:
-        del user["chats"][chat_id]
-
-        if str(
-            user.get(
-                "active_chat"
-            )
-        ) == chat_id:
-
-            user["active_chat"] = next(
-                iter(
-                    user["chats"]
-                )
-            )
-
-    bot.save_db()
-
-
-def clear_chat(
-    user,
-    chat_id,
-):
-    _, chat = get_chat(
-        user,
-        chat_id,
-    )
+    if chat is None:
+        raise ValueError(
+            "Чат не найден."
+        )
 
     chat["history"] = []
     chat["last_prompt"] = None
     chat["last_request"] = None
 
-    if str(chat_id) == "main":
-        chat.pop(
-            "title",
-            None,
+
+# ============================================================
+# AI CHAT
+# ============================================================
+
+def call_ai_for_miniapp(
+    u,
+    messages,
+    vision=False,
+    requested_model=None,
+):
+    """
+    Важно:
+    Не меняем u["model"] временно.
+    Это предотвращает race condition при двух
+    одновременных запросах одного пользователя.
+    """
+
+    preferred = requested_model
+
+    if not preferred:
+        preferred = (
+            None
+            if u.get("model") == "auto"
+            else u.get("model")
         )
 
-    bot.save_db()
+    try:
+        return bot.ai_chat(
+            u,
+            messages,
+            vision=vision,
+            preferred_model=preferred,
+        )
+
+    except TypeError:
+        # Совместимость с текущей версией bot.py,
+        # если preferred_model ещё не добавлен.
+        if preferred:
+            old_model = u.get(
+                "model",
+                "auto",
+            )
+
+            u["model"] = preferred
+
+            try:
+                return bot.ai_chat(
+                    u,
+                    messages,
+                    vision=vision,
+                )
+            finally:
+                u["model"] = old_model
+
+        return bot.ai_chat(
+            u,
+            messages,
+            vision=vision,
+        )
 
 
 def update_chat_title_after_success(
     chat,
-    text,
+    user_text,
 ):
-    if not str(
-        chat.get("title") or ""
-    ).strip():
+    if chat.get("history"):
+        return
 
-        clean = " ".join(
-            str(text or "").split()
-        )
+    clean = " ".join(
+        str(user_text).split()
+    ).strip()
 
-        if clean:
-            chat["title"] = (
-                clean[:42].rstrip()
-                + (
-                    "…"
-                    if len(clean) > 42
-                    else ""
-                )
-            )
+    if clean:
+        chat["last_prompt"] = clean[:200]
 
 
 def handle_chat(
-    user,
-    data,
+    user_id,
+    u,
+    payload,
 ):
-    text = str(
-        data.get(
+    message = str(
+        payload.get(
             "message",
             "",
         )
-        or ""
     ).strip()
 
-    image = data.get(
+    if not message:
+        message = "Ответь на изображение."
+
+    if len(message) > MAX_MESSAGE:
+        raise ValueError(
+            f"Сообщение слишком длинное. Максимум {MAX_MESSAGE} символов."
+        )
+
+    chat_id = payload.get(
+        "chat_id"
+    )
+
+    if chat_id:
+        chat = get_chat(
+            u,
+            str(chat_id),
+        )
+
+        if chat is None:
+            raise ValueError(
+                "Чат не найден."
+            )
+
+        u["active_chat"] = str(
+            chat_id
+        )
+    else:
+        chat = bot.get_chat(u)
+
+    requested_model = str(
+        payload.get(
+            "model",
+            "",
+        )
+    ).strip()
+
+    if not requested_model:
+        requested_model = None
+
+    if requested_model and not validate_model(
+        requested_model
+    ):
+        raise ValueError(
+            "Выбранная модель недоступна."
+        )
+
+    style = payload.get(
+        "style"
+    )
+
+    if style in STYLE_VALUES:
+        u["style"] = style
+
+    image_data = payload.get(
         "image"
     )
 
-    if not text and not image:
-        raise ValueError(
-            "Сообщение пустое."
-        )
+    vision = bool(image_data)
 
-    if len(text) > MAX_MESSAGE:
-        raise ValueError(
-            "Сообщение слишком длинное."
-        )
-
-    requested_model = validate_model(
-        data.get(
-            "model",
-            user.get(
-                "model",
-                "auto",
-            ),
-        )
+    messages = build_messages(
+        u,
+        chat,
+        message,
     )
 
-    chat_id, chat = get_chat(
-        user,
-        data.get(
-            "chat_id"
-        ),
-    )
-
-    user["active_chat"] = chat_id
-
-    if not require_access(
-        user
-    ):
-        raise PermissionError(
-            "Для использования Bulba AI "
-            "нужна активная лицензия."
+    if image_data:
+        image_content = make_image_content(
+            image_data,
+            message,
         )
 
-    if not bot.allowed_request(
-        user
-    ):
-        raise ValueError(
-            "Слишком много запросов. "
-            "Подожди немного."
-        )
+        messages[-1] = {
+            "role": "user",
+            "content": image_content,
+        }
 
-    old_model = user.get(
-        "model",
-        "auto",
+    answer, error = call_ai_for_miniapp(
+        u,
+        messages,
+        vision=vision,
+        requested_model=requested_model,
     )
-
-    user["model"] = (
-        requested_model
-    )
-
-    try:
-        if image:
-            current_content = (
-                make_image_content(
-                    text,
-                    image,
-                )
-            )
-
-            messages = build_messages(
-                user,
-                chat,
-                current_content,
-            )
-
-            answer, error = bot.ai_chat(
-                user,
-                messages,
-                vision=True,
-            )
-
-        else:
-            messages = build_messages(
-                user,
-                chat,
-                text,
-            )
-
-            answer, error = bot.ai_chat(
-                user,
-                messages,
-                vision=False,
-            )
-
-    finally:
-        user["model"] = old_model
 
     if not answer:
-        user["errors"] = int(
-            user.get(
-                "errors",
-                0,
-            )
-            or 0
-        ) + 1
-
-        bot.db["total_errors"] = int(
-            bot.db.get(
-                "total_errors",
-                0,
-            )
-            or 0
-        ) + 1
-
-        bot.save_db()
-
         raise RuntimeError(
             error
             or "Не удалось получить ответ."
         )
 
-    # ВАЖНО:
-    # текущий запрос НЕ находится в history
-    # до успешного ответа API.
-    #
-    # Поэтому в контекст он попадает ровно один раз:
-    # через build_messages().
-    #
-    # В history он добавляется только после успеха.
+    # Только после успешного ответа
+    # добавляем сообщение в историю.
+    chat["history"].append({
+        "role": "user",
+        "content": message,
+    })
 
-    bot.add_history(
-        user,
-        "user",
-        text or "[Изображение]",
-    )
+    chat["history"].append({
+        "role": "assistant",
+        "content": answer,
+    })
 
-    bot.add_history(
-        user,
-        "assistant",
-        answer,
-    )
+    chat["history"] = chat["history"][
+        -bot.MAX_HISTORY:
+    ]
 
-    chat["last_prompt"] = (
-        text
-        or "[Изображение]"
-    )
+    chat["last_prompt"] = message
 
     chat["last_request"] = {
-        "kind": (
-            "image"
-            if image
-            else "text"
-        ),
-        "ts": int(
-            time.time()
-        ),
+        "kind": "image" if image_data else "text",
+        "text": message,
     }
 
     chat["requests"] = int(
@@ -939,15 +891,13 @@ def handle_chat(
             "requests",
             0,
         )
-        or 0
     ) + 1
 
-    user["requests"] = int(
-        user.get(
+    u["requests"] = int(
+        u.get(
             "requests",
             0,
         )
-        or 0
     ) + 1
 
     bot.db["total_requests"] = int(
@@ -955,119 +905,71 @@ def handle_chat(
             "total_requests",
             0,
         )
-        or 0
     ) + 1
 
-    update_chat_title_after_success(
-        chat,
-        text,
-    )
+    # Лицензия считается только после успешного ответа.
+    if not bot.consume_license_after_success(
+        u
+    ):
+        raise RuntimeError(
+            "Лимит лицензии исчерпан."
+        )
 
     bot.save_db()
 
-    try:
-        bot.consume_license_after_success(
-            user
-        )
-    except Exception:
-        pass
-
     return {
         "answer": answer,
-        "model": requested_model,
         "state": frontend_state(
-            user
+            user_id,
+            u,
         ),
     }
 
 
-class MiniAppHandler(
-    BaseHTTPRequestHandler
-):
+# ============================================================
+# HTTP HANDLER
+# ============================================================
 
-    server_version = (
-        "BulbaMiniApp/2.0"
-    )
+class MiniAppHandler(BaseHTTPRequestHandler):
 
-    def log_message(
-        self,
-        fmt,
-        *args,
-    ):
+    server_version = "BulbaMaxAI-MiniApp/16"
+
+    def log_message(self, format, *args):
         print(
             "MiniApp:",
-            fmt % args,
+            format % args,
         )
-
-    def _error(
-        self,
-        status,
-        message,
-    ):
-        send_json(
-            self,
-            status,
-            {
-                "ok": False,
-                "error": str(message),
-            },
-        )
-
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header(
-            "Cache-Control",
-            "no-store",
-        )
-        self.end_headers()
 
     def do_GET(self):
-        path = urllib.parse.urlparse(
-            self.path
-        ).path
-
         try:
+            path = urllib.parse.urlparse(
+                self.path
+            ).path
 
             if path in (
                 "/",
                 "/miniapp",
                 "/miniapp/",
             ):
-
                 if not MINIAPP_FILE.exists():
-                    raise FileNotFoundError(
-                        "miniapp/index.html не найден."
+                    send_json(
+                        self,
+                        404,
+                        {
+                            "ok": False,
+                            "error": "Mini App не найден.",
+                        },
                     )
+                    return
 
-                body = (
-                    MINIAPP_FILE.read_bytes()
+                html = MINIAPP_FILE.read_text(
+                    encoding="utf-8"
                 )
 
-                self.send_response(
-                    200
+                send_html(
+                    self,
+                    html,
                 )
-
-                self.send_header(
-                    "Content-Type",
-                    "text/html; charset=utf-8",
-                )
-
-                self.send_header(
-                    "Cache-Control",
-                    "no-store",
-                )
-
-                self.send_header(
-                    "Content-Length",
-                    str(len(body)),
-                )
-
-                self.end_headers()
-
-                self.wfile.write(
-                    body
-                )
-
                 return
 
             if path == "/health":
@@ -1077,464 +979,597 @@ class MiniAppHandler(
                     {
                         "ok": True,
                         "service": "BulbaMaxAI",
-                        "version": getattr(
-                            bot,
-                            "BOT_VERSION",
-                            "V16",
-                        ),
+                        "version": bot.BOT_VERSION,
                     },
                 )
                 return
-
-            if path == "/api/state":
-
-                user = get_user_from_request(
-                    self
-                )
-
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "state":
-                            frontend_state(
-                                user
-                            ),
-                    },
-                )
-
-                return
-
-            if path == "/api/models":
-
-                user = get_user_from_request(
-                    self
-                )
-
-                if not require_access(
-                    user
-                ):
-                    raise PermissionError(
-                        "Для использования Bulba AI "
-                        "нужна активная лицензия."
-                    )
-
-                models = model_list()
-
-                selected = validate_model(
-                    user.get(
-                        "model",
-                        "auto",
-                    )
-                )
-
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "models": models,
-                        "selected": selected,
-                    },
-                )
-
-                return
-
-            self._error(
-                404,
-                "Страница не найдена.",
-            )
-
-        except PermissionError as exc:
-            self._error(
-                403,
-                exc,
-            )
-
-        except (
-            ValueError,
-            RuntimeError,
-        ) as exc:
-            self._error(
-                400,
-                exc,
-            )
-
-        except Exception as exc:
-            print(
-                "GET error:",
-                repr(exc),
-            )
-
-            self._error(
-                500,
-                "Внутренняя ошибка сервера.",
-            )
-
-    def do_POST(self):
-        path = urllib.parse.urlparse(
-            self.path
-        ).path
-
-        try:
 
             user = get_user_from_request(
                 self
             )
 
-            data = read_json(
+            if not user:
+                send_json(
+                    self,
+                    401,
+                    {
+                        "ok": False,
+                        "error": "Telegram авторизация недействительна.",
+                    },
+                )
+                return
+
+            user_id = str(
+                user["id"]
+            )
+
+            allowed, reason = require_access(
+                user_id
+            )
+
+            if not allowed:
+                send_json(
+                    self,
+                    403,
+                    {
+                        "ok": False,
+                        "error": reason,
+                    },
+                )
+                return
+
+            u = bot.get_user(
+                user_id
+            )
+
+            if path == "/api/state":
+                send_json(
+                    self,
+                    200,
+                    {
+                        "ok": True,
+                        "state": frontend_state(
+                            user_id,
+                            u,
+                        ),
+                    },
+                )
+                return
+
+            if path == "/api/models":
+                send_json(
+                    self,
+                    200,
+                    {
+                        "ok": True,
+                        "models": model_list(),
+                    },
+                )
+                return
+
+            send_json(
+                self,
+                404,
+                {
+                    "ok": False,
+                    "error": "Маршрут не найден.",
+                },
+            )
+
+        except Exception as e:
+            print(
+                "GET error:",
+                repr(e),
+            )
+
+            send_json(
+                self,
+                500,
+                {
+                    "ok": False,
+                    "error": "Внутренняя ошибка сервера.",
+                },
+            )
+
+    def do_POST(self):
+        try:
+            path = urllib.parse.urlparse(
+                self.path
+            ).path
+
+            user = get_user_from_request(
                 self
             )
 
-            if path == "/api/chat":
-
-                result = handle_chat(
-                    user,
-                    data,
-                )
-
+            if not user:
                 send_json(
                     self,
-                    200,
+                    401,
                     {
-                        "ok": True,
-                        **result,
+                        "ok": False,
+                        "error": "Telegram авторизация недействительна.",
                     },
                 )
-
                 return
 
-            if path == "/api/chat/new":
+            user_id = str(
+                user["id"]
+            )
 
-                if not require_access(
-                    user
-                ):
-                    raise PermissionError(
-                        "Для использования Bulba AI "
-                        "нужна активная лицензия."
+            allowed, reason = require_access(
+                user_id
+            )
+
+            if not allowed:
+                send_json(
+                    self,
+                    403,
+                    {
+                        "ok": False,
+                        "error": reason,
+                    },
+                )
+                return
+
+            payload = read_json(
+                self
+            )
+
+            u = bot.get_user(
+                user_id
+            )
+
+            lock = get_user_lock(
+                user_id
+            )
+
+            with lock:
+
+                # ------------------------------------------------
+                # CHAT
+                # ------------------------------------------------
+
+                if path == "/api/chat":
+                    result = handle_chat(
+                        user_id,
+                        u,
+                        payload,
                     )
 
-                chat_id = create_chat(
-                    user
-                )
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            **result,
+                        },
+                    )
+                    return
 
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "chat_id": chat_id,
-                        "state":
-                            frontend_state(
-                                user
-                            ),
-                    },
-                )
+                # ------------------------------------------------
+                # NEW CHAT
+                # ------------------------------------------------
 
-                return
-
-            if path == "/api/chat/select":
-
-                chat_id, _ = get_chat(
-                    user,
-                    data.get(
-                        "chat_id"
-                    ),
-                )
-
-                user["active_chat"] = (
-                    chat_id
-                )
-
-                bot.save_db()
-
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "state":
-                            frontend_state(
-                                user
-                            ),
-                    },
-                )
-
-                return
-
-            if path == "/api/chat/rename":
-
-                rename_chat(
-                    user,
-                    data.get(
-                        "chat_id"
-                    ),
-                    data.get(
-                        "title"
-                    ),
-                )
-
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "state":
-                            frontend_state(
-                                user
-                            ),
-                    },
-                )
-
-                return
-
-            if path == "/api/chat/delete":
-
-                delete_chat(
-                    user,
-                    data.get(
-                        "chat_id"
-                    ),
-                )
-
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "state":
-                            frontend_state(
-                                user
-                            ),
-                    },
-                )
-
-                return
-
-            if path == "/api/chat/clear":
-
-                clear_chat(
-                    user,
-                    data.get(
-                        "chat_id"
-                    ),
-                )
-
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "state":
-                            frontend_state(
-                                user
-                            ),
-                    },
-                )
-
-                return
-
-            if path == "/api/settings":
-
-                if "model" in data:
-                    user["model"] = (
-                        validate_model(
-                            data.get(
-                                "model"
-                            )
-                        )
+                if path == "/api/chat/new":
+                    requested_name = payload.get(
+                        "name"
                     )
 
-                if "style" in data:
-
-                    style = str(
-                        data.get(
-                            "style"
-                        )
-                        or "normal"
-                    ).strip()
-
-                    if style not in STYLE_VALUES:
-                        raise ValueError(
-                            "Неизвестный стиль ответа."
-                        )
-
-                    user["style"] = style
-
-                bot.save_db()
-
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "state":
-                            frontend_state(
-                                user
-                            ),
-                    },
-                )
-
-                return
-
-            if path == "/api/memory":
-
-                action = str(
-                    data.get(
-                        "action"
-                    )
-                    or ""
-                ).strip().lower()
-
-                if action == "clear":
-                    user["memory"] = {}
-
-                elif action == "set":
-
-                    key = " ".join(
-                        str(
-                            data.get(
-                                "key"
-                            )
-                            or ""
-                        ).split()
-                    ).strip()
-
-                    value = " ".join(
-                        str(
-                            data.get(
-                                "value"
-                            )
-                            or ""
-                        ).split()
-                    ).strip()
-
-                    if not key or not value:
-                        raise ValueError(
-                            "Укажи название "
-                            "и значение памяти."
-                        )
-
-                    user.setdefault(
-                        "memory",
-                        {},
-                    )[key[:80]] = value[:500]
-
-                else:
-                    raise ValueError(
-                        "Неизвестное действие памяти."
+                    name = create_chat(
+                        u,
+                        requested_name,
                     )
 
-                bot.save_db()
+                    bot.save_db()
 
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "state":
-                            frontend_state(
-                                user
-                            ),
-                    },
-                )
-
-                return
-
-            if path == "/api/stats":
-
-                send_json(
-                    self,
-                    200,
-                    {
-                        "ok": True,
-                        "stats": {
-                            "requests": int(
-                                user.get(
-                                    "requests",
-                                    0,
-                                )
-                                or 0
-                            ),
-                            "errors": int(
-                                user.get(
-                                    "errors",
-                                    0,
-                                )
-                                or 0
-                            ),
-                            "chats": len(
-                                user.get(
-                                    "chats",
-                                    {},
-                                )
-                            ),
-                            "total_requests": int(
-                                bot.db.get(
-                                    "total_requests",
-                                    0,
-                                )
-                                or 0
-                            ),
-                            "version": getattr(
-                                bot,
-                                "BOT_VERSION",
-                                "V16",
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "chat_id": name,
+                            "state": frontend_state(
+                                user_id,
+                                u,
                             ),
                         },
+                    )
+                    return
+
+                # ------------------------------------------------
+                # SELECT CHAT
+                # ------------------------------------------------
+
+                if path == "/api/chat/select":
+                    chat_id = str(
+                        payload.get(
+                            "chat_id",
+                            "",
+                        )
+                    )
+
+                    if chat_id not in u["chats"]:
+                        send_json(
+                            self,
+                            404,
+                            {
+                                "ok": False,
+                                "error": "Чат не найден.",
+                            },
+                        )
+                        return
+
+                    u["active_chat"] = chat_id
+
+                    bot.save_db()
+
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "state": frontend_state(
+                                user_id,
+                                u,
+                            ),
+                        },
+                    )
+                    return
+
+                # ------------------------------------------------
+                # RENAME CHAT
+                # ------------------------------------------------
+
+                if path == "/api/chat/rename":
+                    chat_id = str(
+                        payload.get(
+                            "chat_id",
+                            "",
+                        )
+                    )
+
+                    new_name = str(
+                        payload.get(
+                            "name",
+                            "",
+                        )
+                    )
+
+                    rename_chat(
+                        u,
+                        chat_id,
+                        new_name,
+                    )
+
+                    bot.save_db()
+
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "state": frontend_state(
+                                user_id,
+                                u,
+                            ),
+                        },
+                    )
+                    return
+
+                # ------------------------------------------------
+                # DELETE CHAT
+                # ------------------------------------------------
+
+                if path == "/api/chat/delete":
+                    chat_id = str(
+                        payload.get(
+                            "chat_id",
+                            "",
+                        )
+                    )
+
+                    delete_chat(
+                        u,
+                        chat_id,
+                    )
+
+                    bot.save_db()
+
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "state": frontend_state(
+                                user_id,
+                                u,
+                            ),
+                        },
+                    )
+                    return
+
+                # ------------------------------------------------
+                # CLEAR CHAT
+                # ------------------------------------------------
+
+                if path == "/api/chat/clear":
+                    chat_id = str(
+                        payload.get(
+                            "chat_id",
+                            u.get(
+                                "active_chat",
+                                "main",
+                            ),
+                        )
+                    )
+
+                    clear_chat(
+                        u,
+                        chat_id,
+                    )
+
+                    bot.save_db()
+
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "state": frontend_state(
+                                user_id,
+                                u,
+                            ),
+                        },
+                    )
+                    return
+
+                # ------------------------------------------------
+                # SETTINGS
+                # ------------------------------------------------
+
+                if path == "/api/settings":
+                    if "style" in payload:
+                        style = payload.get(
+                            "style"
+                        )
+
+                        if style not in STYLE_VALUES:
+                            send_json(
+                                self,
+                                400,
+                                {
+                                    "ok": False,
+                                    "error": "Неизвестный стиль.",
+                                },
+                            )
+                            return
+
+                        u["style"] = style
+
+                    if "model" in payload:
+                        model = str(
+                            payload.get(
+                                "model",
+                                "auto",
+                            )
+                        ).strip()
+
+                        if not validate_model(
+                            model
+                        ):
+                            send_json(
+                                self,
+                                400,
+                                {
+                                    "ok": False,
+                                    "error": "Модель недоступна.",
+                                },
+                            )
+                            return
+
+                        u["model"] = (
+                            model
+                            if model
+                            else "auto"
+                        )
+
+                    bot.save_db()
+
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "state": frontend_state(
+                                user_id,
+                                u,
+                            ),
+                        },
+                    )
+                    return
+
+                # ------------------------------------------------
+                # MEMORY
+                # ------------------------------------------------
+
+                if path == "/api/memory":
+                    action = str(
+                        payload.get(
+                            "action",
+                            "",
+                        )
+                    )
+
+                    if action == "clear":
+                        u["memory"] = {}
+
+                    elif action == "set":
+                        key = str(
+                            payload.get(
+                                "key",
+                                "",
+                            )
+                        ).strip()
+
+                        value = str(
+                            payload.get(
+                                "value",
+                                "",
+                            )
+                        ).strip()
+
+                        if not key:
+                            raise ValueError(
+                                "Ключ памяти пуст."
+                            )
+
+                        u["memory"][
+                            key[:100]
+                        ] = value[:1000]
+
+                    elif action == "delete":
+                        key = str(
+                            payload.get(
+                                "key",
+                                "",
+                            )
+                        ).strip()
+
+                        u["memory"].pop(
+                            key,
+                            None,
+                        )
+
+                    bot.save_db()
+
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "state": frontend_state(
+                                user_id,
+                                u,
+                            ),
+                        },
+                    )
+                    return
+
+                # ------------------------------------------------
+                # STATS
+                # ------------------------------------------------
+
+                if path == "/api/stats":
+                    send_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "stats": {
+                                "requests": int(
+                                    u.get(
+                                        "requests",
+                                        0,
+                                    )
+                                ),
+                                "errors": int(
+                                    u.get(
+                                        "errors",
+                                        0,
+                                    )
+                                ),
+                                "chats": len(
+                                    u.get(
+                                        "chats",
+                                        {},
+                                    )
+                                ),
+                                "total_requests": int(
+                                    bot.db.get(
+                                        "total_requests",
+                                        0,
+                                    )
+                                ),
+                                "total_errors": int(
+                                    bot.db.get(
+                                        "total_errors",
+                                        0,
+                                    )
+                                ),
+                            },
+                        },
+                    )
+                    return
+
+                send_json(
+                    self,
+                    404,
+                    {
+                        "ok": False,
+                        "error": "Маршрут не найден.",
                     },
                 )
 
-                return
-
-            self._error(
-                404,
-                "API-метод не найден.",
-            )
-
-        except PermissionError as exc:
-            self._error(
-                403,
-                exc,
-            )
-
-        except (
-            ValueError,
-            RuntimeError,
-        ) as exc:
-            self._error(
+        except ValueError as e:
+            send_json(
+                self,
                 400,
-                exc,
+                {
+                    "ok": False,
+                    "error": str(e),
+                },
             )
 
-        except Exception as exc:
+        except RuntimeError as e:
+            send_json(
+                self,
+                500,
+                {
+                    "ok": False,
+                    "error": str(e),
+                },
+            )
+
+        except Exception as e:
             print(
                 "POST error:",
-                repr(exc),
+                repr(e),
             )
 
-            self._error(
-                500,
-                "Внутренняя ошибка сервера.",
-            )
+            try:
+                send_json(
+                    self,
+                    500,
+                    {
+                        "ok": False,
+                        "error": "Внутренняя ошибка сервера.",
+                    },
+                )
+            except Exception:
+                pass
 
+
+# ============================================================
+# SERVER
+# ============================================================
 
 def run_server():
+    bot.load_db()
+
     server = ThreadingHTTPServer(
-        (
-            HOST,
-            PORT,
-        ),
+        (HOST, PORT),
         MiniAppHandler,
     )
 
     print(
-        f"Mini App server: "
-        f"http://{HOST}:{PORT}"
+        f"BulbaMaxAI Mini App server listening on {HOST}:{PORT}"
     )
 
     try:
         server.serve_forever()
     finally:
         server.server_close()
+
+
+if __name__ == "__main__":
+    run_server()
