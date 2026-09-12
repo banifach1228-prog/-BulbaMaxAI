@@ -4,12 +4,14 @@ import time
 import hmac
 import hashlib
 import urllib.parse
+import base64
 import threading
 
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import bot
+import licenses
 
 
 HOST = "0.0.0.0"
@@ -31,31 +33,35 @@ MINIAPP_FILE = ROOT / "miniapp" / "index.html"
 
 
 # ============================================================
-# LOCKS
+# USER LOCKS
 # ============================================================
 
 _user_locks = {}
-_user_locks_guard = threading.Lock()
+_user_locks_lock = threading.RLock()
 
 
 def get_user_lock(user_id):
     uid = str(user_id)
 
-    with _user_locks_guard:
-        if uid not in _user_locks:
-            _user_locks[uid] = threading.RLock()
+    with _user_locks_lock:
+        lock = _user_locks.get(uid)
 
-        return _user_locks[uid]
+        if lock is None:
+            lock = threading.RLock()
+            _user_locks[uid] = lock
+
+        return lock
 
 
 # ============================================================
-# HTTP HELPERS
+# HTTP
 # ============================================================
 
 def send_json(handler, status, data):
     body = json.dumps(
         data,
         ensure_ascii=False,
+        separators=(",", ":"),
     ).encode("utf-8")
 
     handler.send_response(status)
@@ -86,11 +92,15 @@ def send_json(handler, status, data):
     )
 
     handler.end_headers()
-    handler.wfile.write(body)
+
+    try:
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
 
 
-def send_html(handler, data):
-    body = data.encode("utf-8")
+def send_html(handler, html):
+    body = html.encode("utf-8")
 
     handler.send_response(200)
 
@@ -115,37 +125,53 @@ def send_html(handler, data):
     )
 
     handler.end_headers()
-    handler.wfile.write(body)
+
+    try:
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
 
 
 def read_json(handler):
     try:
-        length = int(
+        content_length = int(
             handler.headers.get(
                 "Content-Length",
                 "0",
             )
         )
-    except ValueError:
-        raise ValueError("Некорректный Content-Length.")
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Некорректный Content-Length."
+        )
 
-    if length <= 0:
-        raise ValueError("Пустой запрос.")
+    if content_length <= 0:
+        raise ValueError(
+            "Пустой запрос."
+        )
 
-    if length > MAX_BODY:
-        raise ValueError("Запрос слишком большой.")
+    if content_length > MAX_BODY:
+        raise ValueError(
+            "Запрос слишком большой."
+        )
 
-    raw = handler.rfile.read(length)
+    raw = handler.rfile.read(
+        content_length
+    )
 
     try:
         data = json.loads(
             raw.decode("utf-8")
         )
     except Exception:
-        raise ValueError("Некорректный JSON.")
+        raise ValueError(
+            "Некорректный JSON."
+        )
 
     if not isinstance(data, dict):
-        raise ValueError("JSON должен быть объектом.")
+        raise ValueError(
+            "JSON должен быть объектом."
+        )
 
     return data
 
@@ -164,14 +190,17 @@ def validate_init_data(init_data):
             keep_blank_values=True,
         )
 
-        received_hash = parsed.get("hash", [None])[0]
+        received_hash = parsed.get(
+            "hash",
+            [""],
+        )[0]
 
         if not received_hash:
             return None
 
         auth_date_raw = parsed.get(
             "auth_date",
-            [None],
+            [""],
         )[0]
 
         if not auth_date_raw:
@@ -179,24 +208,39 @@ def validate_init_data(init_data):
 
         auth_date = int(auth_date_raw)
 
-        if abs(int(time.time()) - auth_date) > AUTH_MAX_AGE:
+        if (
+            int(time.time()) - auth_date
+            > AUTH_MAX_AGE
+        ):
             return None
 
-        pairs = []
+        if (
+            auth_date - int(time.time())
+            > 60
+        ):
+            return None
+
+        data_pairs = []
 
         for key, values in parsed.items():
             if key == "hash":
                 continue
 
-            value = values[0] if values else ""
+            value = (
+                values[0]
+                if values
+                else ""
+            )
 
-            pairs.append(
+            data_pairs.append(
                 f"{key}={value}"
             )
 
-        pairs.sort()
+        data_pairs.sort()
 
-        data_check_string = "\n".join(pairs)
+        data_check_string = "\n".join(
+            data_pairs
+        )
 
         secret_key = hmac.new(
             b"WebAppData",
@@ -218,28 +262,31 @@ def validate_init_data(init_data):
 
         user_raw = parsed.get(
             "user",
-            [None],
+            [""],
         )[0]
 
         if not user_raw:
             return None
 
-        user_data = json.loads(user_raw)
+        user_data = json.loads(
+            user_raw
+        )
 
-        if not isinstance(user_data, dict):
+        if not isinstance(
+            user_data,
+            dict,
+        ):
             return None
 
-        user_id = user_data.get("id")
-
-        if not user_id:
+        if not user_data.get("id"):
             return None
 
         return user_data
 
-    except Exception as e:
+    except Exception as exc:
         print(
             "Mini App auth error:",
-            repr(e),
+            repr(exc),
         )
         return None
 
@@ -256,7 +303,9 @@ def get_user_from_request(handler):
             "",
         ).strip()
 
-    return validate_init_data(init_data)
+    return validate_init_data(
+        init_data
+    )
 
 
 # ============================================================
@@ -270,10 +319,12 @@ def require_access(user_id):
     ).strip() != "1":
         return True, ""
 
-    if bot.is_admin(user_id):
+    if licenses.is_admin(user_id):
         return True, ""
 
-    return bot.user_has_access(user_id)
+    return licenses.user_has_access(
+        user_id
+    )
 
 
 # ============================================================
@@ -281,10 +332,22 @@ def require_access(user_id):
 # ============================================================
 
 def model_list():
-    models = []
+    result = []
 
-    for item in bot.get_models():
-        if not isinstance(item, dict):
+    try:
+        models = bot.get_models()
+    except Exception as exc:
+        print(
+            "Models error:",
+            repr(exc),
+        )
+        models = []
+
+    for item in models:
+        if not isinstance(
+            item,
+            dict,
+        ):
             continue
 
         model_id = item.get("id")
@@ -292,34 +355,48 @@ def model_list():
         if not model_id:
             continue
 
-        if bot.is_bad_model(model_id):
-            continue
+        try:
+            if bot.is_bad_model(
+                model_id
+            ):
+                continue
+        except Exception:
+            pass
 
-        models.append({
-            "id": model_id,
-            "name": model_id,
+        result.append({
+            "id": str(model_id),
+            "name": str(
+                item.get(
+                    "name",
+                    model_id,
+                )
+            ),
         })
 
-    return models
+    return result
 
 
 def validate_model(model):
-    if not model or model == "auto":
+    if not model:
         return True
 
-    for item in model_list():
-        if item["id"] == model:
-            return True
+    if model == "auto":
+        return True
 
-    return False
+    return any(
+        item["id"] == model
+        for item in model_list()
+    )
 
 
 # ============================================================
-# CHAT HELPERS
+# STATE
 # ============================================================
 
 def chat_title(name):
-    name = str(name or "").strip()
+    name = str(
+        name or ""
+    ).strip()
 
     if not name:
         return "Новый чат"
@@ -327,89 +404,141 @@ def chat_title(name):
     return name[:80]
 
 
-def frontend_state(user_id, u):
-    chats = []
+def history_for_frontend(history):
+    result = []
 
-    for name, chat in u["chats"].items():
-        history = chat.get(
-            "history",
-            [],
+    for item in history:
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        role = item.get("role")
+
+        if role not in (
+            "user",
+            "assistant",
+        ):
+            continue
+
+        content = item.get(
+            "content",
+            "",
         )
 
-        messages = []
+        if isinstance(
+            content,
+            list,
+        ):
+            text_parts = []
 
-        for item in history:
-            if not isinstance(item, dict):
-                continue
+            for part in content:
+                if not isinstance(
+                    part,
+                    dict,
+                ):
+                    continue
 
-            role = item.get("role")
+                if part.get("type") == "text":
+                    text_parts.append(
+                        str(
+                            part.get(
+                                "text",
+                                "",
+                            )
+                        )
+                    )
 
-            if role not in (
-                "user",
-                "assistant",
-                "system",
-            ):
-                continue
-
-            content = item.get(
-                "content",
-                "",
+            content = "\n".join(
+                text_parts
             )
 
-            if isinstance(content, list):
-                text_parts = []
-
-                for part in content:
-                    if (
-                        isinstance(part, dict)
-                        and part.get("type") == "text"
-                    ):
-                        text_parts.append(
-                            str(part.get("text", ""))
-                        )
-
-                content = "\n".join(
-                    text_parts
-                )
-
-            messages.append({
-                "role": role,
-                "content": str(content),
-            })
-
-        chats.append({
-            "id": name,
-            "name": chat_title(name),
-            "messages": messages,
-            "requests": int(
-                chat.get("requests", 0)
-            ),
-            "created": int(
-                chat.get("created", 0)
+        result.append({
+            "role": role,
+            "content": str(
+                content or ""
             ),
         })
 
-    memory = u.get(
+    return result
+
+
+def frontend_state(user_id, user):
+    chats = []
+
+    for chat_id, chat in user.get(
+        "chats",
+        {},
+    ).items():
+
+        if not isinstance(
+            chat,
+            dict,
+        ):
+            continue
+
+        chats.append({
+            "id": str(chat_id),
+            "name": chat_title(
+                chat_id
+            ),
+            "active": (
+                str(chat_id)
+                == str(
+                    user.get(
+                        "active_chat",
+                        "main",
+                    )
+                )
+            ),
+            "messages": history_for_frontend(
+                chat.get(
+                    "history",
+                    [],
+                )
+            ),
+            "requests": int(
+                chat.get(
+                    "requests",
+                    0,
+                )
+            ),
+            "created": int(
+                chat.get(
+                    "created",
+                    0,
+                )
+            ),
+        })
+
+    memory = user.get(
         "memory",
         {},
     )
+
+    if not isinstance(
+        memory,
+        dict,
+    ):
+        memory = {}
 
     return {
         "user": {
             "id": str(user_id),
         },
 
-        "model": u.get(
+        "model": user.get(
             "model",
             "auto",
         ),
 
-        "style": u.get(
+        "style": user.get(
             "style",
             "normal",
         ),
 
-        "active_chat": u.get(
+        "active_chat": user.get(
             "active_chat",
             "main",
         ),
@@ -419,32 +548,57 @@ def frontend_state(user_id, u):
         "memory": memory,
 
         "requests": int(
-            u.get("requests", 0)
+            user.get(
+                "requests",
+                0,
+            )
         ),
 
         "errors": int(
-            u.get("errors", 0)
+            user.get(
+                "errors",
+                0,
+            )
         ),
 
         "version": bot.BOT_VERSION,
     }
 
 
-def get_chat(u, chat_id=None):
-    if chat_id:
-        if chat_id not in u["chats"]:
-            return None
+# ============================================================
+# CHAT
+# ============================================================
 
-        return u["chats"][chat_id]
+def get_chat(user, chat_id=None):
+    if chat_id is None:
+        chat_id = user.get(
+            "active_chat",
+            "main",
+        )
 
-    return bot.get_chat(u)
+    chats = user.get(
+        "chats",
+        {},
+    )
+
+    chat = chats.get(
+        chat_id
+    )
+
+    return chat
 
 
-def build_messages(u, chat, user_text):
+def build_messages(
+    user,
+    chat,
+    message,
+):
     messages = [
         {
             "role": "system",
-            "content": bot.style_system(u),
+            "content": bot.style_system(
+                user
+            ),
         }
     ]
 
@@ -453,8 +607,13 @@ def build_messages(u, chat, user_text):
         [],
     )
 
-    for item in history[-bot.MAX_HISTORY:]:
-        if not isinstance(item, dict):
+    for item in history[
+        -bot.MAX_HISTORY:
+    ]:
+        if not isinstance(
+            item,
+            dict,
+        ):
             continue
 
         role = item.get("role")
@@ -480,7 +639,7 @@ def build_messages(u, chat, user_text):
 
     messages.append({
         "role": "user",
-        "content": user_text,
+        "content": message,
     })
 
     return messages
@@ -490,16 +649,26 @@ def build_messages(u, chat, user_text):
 # IMAGE
 # ============================================================
 
-def make_image_content(data_url, question):
-    if not isinstance(data_url, str):
-        raise ValueError("Некорректное изображение.")
+def make_image_content(
+    data_url,
+    question,
+):
+    if not isinstance(
+        data_url,
+        str,
+    ):
+        raise ValueError(
+            "Некорректное изображение."
+        )
 
     if len(data_url) > MAX_IMAGE_BASE64:
         raise ValueError(
             "Изображение слишком большое."
         )
 
-    if not data_url.startswith("data:image/"):
+    if not data_url.startswith(
+        "data:image/"
+    ):
         raise ValueError(
             "Разрешены только изображения."
         )
@@ -523,23 +692,19 @@ def make_image_content(data_url, question):
         header[5:]
         .split(";", 1)[0]
         .strip()
+        .lower()
     )
 
-    allowed_mimes = {
+    allowed = {
         "image/jpeg",
         "image/png",
         "image/webp",
         "image/gif",
     }
 
-    if mime not in allowed_mimes:
+    if mime not in allowed:
         raise ValueError(
-            "Этот формат изображения не поддерживается."
-        )
-
-    if not encoded:
-        raise ValueError(
-            "Пустое изображение."
+            "Формат изображения не поддерживается."
         )
 
     try:
@@ -549,7 +714,7 @@ def make_image_content(data_url, question):
         )
     except Exception:
         raise ValueError(
-            "Некорректный base64."
+            "Повреждённое изображение."
         )
 
     return [
@@ -570,7 +735,10 @@ def make_image_content(data_url, question):
 # CHAT MANAGEMENT
 # ============================================================
 
-def create_chat(u, requested_name=None):
+def create_chat(
+    user,
+    requested_name=None,
+):
     name = str(
         requested_name or ""
     ).strip()
@@ -580,99 +748,154 @@ def create_chat(u, requested_name=None):
 
     name = name[:60]
 
-    if name in u["chats"]:
+    if name in user["chats"]:
         base = name
         index = 2
 
-        while f"{base} {index}" in u["chats"]:
+        while (
+            f"{base} {index}"
+            in user["chats"]
+        ):
             index += 1
 
         name = f"{base} {index}"
 
-    if len(u["chats"]) >= bot.MAX_CHATS:
-        candidates = [
-            (
-                int(
-                    chat.get(
-                        "created",
-                        0,
-                    )
-                ),
-                chat_name,
+    if len(
+        user["chats"]
+    ) >= bot.MAX_CHATS:
+
+        candidates = []
+
+        for old_name, old_chat in user[
+            "chats"
+        ].items():
+
+            if old_name == user.get(
+                "active_chat"
+            ):
+                continue
+
+            candidates.append(
+                (
+                    int(
+                        old_chat.get(
+                            "created",
+                            0,
+                        )
+                    ),
+                    old_name,
+                )
             )
-            for chat_name, chat in u["chats"].items()
-            if chat_name != u["active_chat"]
-        ]
 
         if candidates:
-            _, old_name = sorted(
+            _, oldest = min(
                 candidates
-            )[0]
+            )
 
-            del u["chats"][old_name]
+            del user[
+                "chats"
+            ][oldest]
 
-    u["chats"][name] = bot.default_chat()
-    u["active_chat"] = name
+    user["chats"][name] = (
+        bot.default_chat()
+    )
+
+    user["active_chat"] = name
 
     return name
 
 
-def rename_chat(u, old_name, new_name):
-    if old_name not in u["chats"]:
+def rename_chat(
+    user,
+    old_name,
+    new_name,
+):
+    if old_name not in user[
+        "chats"
+    ]:
         raise ValueError(
             "Чат не найден."
         )
 
     new_name = str(
         new_name or ""
-    ).strip()
+    ).strip()[:60]
 
     if not new_name:
         raise ValueError(
             "Название не может быть пустым."
         )
 
-    new_name = new_name[:60]
-
-    if new_name != old_name and new_name in u["chats"]:
+    if (
+        new_name != old_name
+        and new_name in user["chats"]
+    ):
         raise ValueError(
             "Чат с таким названием уже существует."
         )
 
     if new_name == old_name:
-        return old_name
+        return new_name
 
-    chat = u["chats"].pop(old_name)
-    u["chats"][new_name] = chat
+    chat = user[
+        "chats"
+    ].pop(old_name)
 
-    if u["active_chat"] == old_name:
-        u["active_chat"] = new_name
+    user[
+        "chats"
+    ][new_name] = chat
+
+    if user.get(
+        "active_chat"
+    ) == old_name:
+        user[
+            "active_chat"
+        ] = new_name
 
     return new_name
 
 
-def delete_chat(u, chat_id):
-    if chat_id not in u["chats"]:
+def delete_chat(
+    user,
+    chat_id,
+):
+    if chat_id not in user[
+        "chats"
+    ]:
         raise ValueError(
             "Чат не найден."
         )
 
-    if len(u["chats"]) <= 1:
+    if len(
+        user["chats"]
+    ) <= 1:
         raise ValueError(
             "Нельзя удалить последний чат."
         )
 
-    del u["chats"][chat_id]
+    del user[
+        "chats"
+    ][chat_id]
 
-    if u["active_chat"] == chat_id:
-        u["active_chat"] = next(
-            iter(u["chats"])
+    if user.get(
+        "active_chat"
+    ) == chat_id:
+
+        user[
+            "active_chat"
+        ] = next(
+            iter(
+                user["chats"]
+            )
         )
 
 
-def clear_chat(u, chat_id):
+def clear_chat(
+    user,
+    chat_id,
+):
     chat = get_chat(
-        u,
+        user,
         chat_id,
     )
 
@@ -682,89 +905,80 @@ def clear_chat(u, chat_id):
         )
 
     chat["history"] = []
+
     chat["last_prompt"] = None
+
     chat["last_request"] = None
 
 
 # ============================================================
-# AI CHAT
+# AI
 # ============================================================
 
-def call_ai_for_miniapp(
-    u,
+def call_ai(
+    user,
     messages,
     vision=False,
     requested_model=None,
 ):
     """
-    Важно:
-    Не меняем u["model"] временно.
-    Это предотвращает race condition при двух
-    одновременных запросах одного пользователя.
+    Совместимость с текущим bot.py.
+
+    Если в будущем ai_chat получит preferred_model,
+    используем его.
+
+    Если его пока нет — временно используем выбранную
+    модель и сразу возвращаем значение обратно.
     """
 
-    preferred = requested_model
-
-    if not preferred:
-        preferred = (
-            None
-            if u.get("model") == "auto"
-            else u.get("model")
+    if requested_model in (
+        None,
+        "",
+        "auto",
+    ):
+        return bot.ai_chat(
+            user,
+            messages,
+            vision=vision,
         )
+
+    ai_chat_code = bot.ai_chat
+
+    try:
+        return ai_chat_code(
+            user,
+            messages,
+            vision=vision,
+            preferred_model=requested_model,
+        )
+
+    except TypeError as exc:
+        if (
+            "preferred_model"
+            not in str(exc)
+        ):
+            raise
+
+    old_model = user.get(
+        "model",
+        "auto",
+    )
+
+    user["model"] = requested_model
 
     try:
         return bot.ai_chat(
-            u,
-            messages,
-            vision=vision,
-            preferred_model=preferred,
-        )
-
-    except TypeError:
-        # Совместимость с текущей версией bot.py,
-        # если preferred_model ещё не добавлен.
-        if preferred:
-            old_model = u.get(
-                "model",
-                "auto",
-            )
-
-            u["model"] = preferred
-
-            try:
-                return bot.ai_chat(
-                    u,
-                    messages,
-                    vision=vision,
-                )
-            finally:
-                u["model"] = old_model
-
-        return bot.ai_chat(
-            u,
+            user,
             messages,
             vision=vision,
         )
-
-
-def update_chat_title_after_success(
-    chat,
-    user_text,
-):
-    if chat.get("history"):
-        return
-
-    clean = " ".join(
-        str(user_text).split()
-    ).strip()
-
-    if clean:
-        chat["last_prompt"] = clean[:200]
+    finally:
+        user["model"] = old_model
 
 
 def handle_chat(
     user_id,
-    u,
+    user,
     payload,
 ):
     message = str(
@@ -774,8 +988,19 @@ def handle_chat(
         )
     ).strip()
 
+    image = payload.get(
+        "image"
+    )
+
+    if not message and not image:
+        raise ValueError(
+            "Введите сообщение."
+        )
+
     if not message:
-        message = "Ответь на изображение."
+        message = (
+            "Проанализируй это изображение."
+        )
 
     if len(message) > MAX_MESSAGE:
         raise ValueError(
@@ -787,21 +1012,34 @@ def handle_chat(
     )
 
     if chat_id:
-        chat = get_chat(
-            u,
-            str(chat_id),
-        )
+        chat_id = str(chat_id)
 
-        if chat is None:
+        if chat_id not in user[
+            "chats"
+        ]:
             raise ValueError(
                 "Чат не найден."
             )
 
-        u["active_chat"] = str(
-            chat_id
-        )
+        user[
+            "active_chat"
+        ] = chat_id
+
     else:
-        chat = bot.get_chat(u)
+        chat_id = user.get(
+            "active_chat",
+            "main",
+        )
+
+    chat = get_chat(
+        user,
+        chat_id,
+    )
+
+    if chat is None:
+        raise ValueError(
+            "Чат не найден."
+        )
 
     requested_model = str(
         payload.get(
@@ -809,9 +1047,6 @@ def handle_chat(
             "",
         )
     ).strip()
-
-    if not requested_model:
-        requested_model = None
 
     if requested_model and not validate_model(
         requested_model
@@ -825,23 +1060,19 @@ def handle_chat(
     )
 
     if style in STYLE_VALUES:
-        u["style"] = style
-
-    image_data = payload.get(
-        "image"
-    )
-
-    vision = bool(image_data)
+        user["style"] = style
 
     messages = build_messages(
-        u,
+        user,
         chat,
         message,
     )
 
-    if image_data:
+    vision = False
+
+    if image:
         image_content = make_image_content(
-            image_data,
+            image,
             message,
         )
 
@@ -850,21 +1081,42 @@ def handle_chat(
             "content": image_content,
         }
 
-    answer, error = call_ai_for_miniapp(
-        u,
+        vision = True
+
+    answer, error = call_ai(
+        user,
         messages,
         vision=vision,
-        requested_model=requested_model,
+        requested_model=(
+            requested_model
+            or None
+        ),
     )
 
     if not answer:
+        user["errors"] = int(
+            user.get(
+                "errors",
+                0,
+            )
+        ) + 1
+
+        bot.db["total_errors"] = int(
+            bot.db.get(
+                "total_errors",
+                0,
+            )
+        ) + 1
+
+        bot.save_db()
+
         raise RuntimeError(
             error
             or "Не удалось получить ответ."
         )
 
-    # Только после успешного ответа
-    # добавляем сообщение в историю.
+    # Добавляем историю только после успешного ответа.
+
     chat["history"].append({
         "role": "user",
         "content": message,
@@ -875,14 +1127,20 @@ def handle_chat(
         "content": answer,
     })
 
-    chat["history"] = chat["history"][
+    chat["history"] = chat[
+        "history"
+    ][
         -bot.MAX_HISTORY:
     ]
 
     chat["last_prompt"] = message
 
     chat["last_request"] = {
-        "kind": "image" if image_data else "text",
+        "kind": (
+            "image"
+            if image
+            else "text"
+        ),
         "text": message,
     }
 
@@ -893,8 +1151,8 @@ def handle_chat(
         )
     ) + 1
 
-    u["requests"] = int(
-        u.get(
+    user["requests"] = int(
+        user.get(
             "requests",
             0,
         )
@@ -907,38 +1165,43 @@ def handle_chat(
         )
     ) + 1
 
-    # Лицензия считается только после успешного ответа.
-    if not bot.consume_license_after_success(
-        u
-    ):
-        raise RuntimeError(
-            "Лимит лицензии исчерпан."
-        )
-
+    # Сохраняем через существующую систему bot.py.
     bot.save_db()
 
     return {
         "answer": answer,
         "state": frontend_state(
             user_id,
-            u,
+            user,
         ),
     }
 
 
 # ============================================================
-# HTTP HANDLER
+# REQUEST HANDLER
 # ============================================================
 
-class MiniAppHandler(BaseHTTPRequestHandler):
+class MiniAppHandler(
+    BaseHTTPRequestHandler
+):
 
-    server_version = "BulbaMaxAI-MiniApp/16"
+    server_version = (
+        "BulbaMaxAI-MiniApp/16"
+    )
 
-    def log_message(self, format, *args):
+    def log_message(
+        self,
+        format,
+        *args,
+    ):
         print(
             "MiniApp:",
             format % args,
         )
+
+    # --------------------------------------------------------
+    # GET
+    # --------------------------------------------------------
 
     def do_GET(self):
         try:
@@ -957,7 +1220,10 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         404,
                         {
                             "ok": False,
-                            "error": "Mini App не найден.",
+                            "error": (
+                                "miniapp/index.html "
+                                "не найден."
+                            ),
                         },
                     )
                     return
@@ -984,27 +1250,34 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            user = get_user_from_request(
-                self
+            user_data = (
+                get_user_from_request(
+                    self
+                )
             )
 
-            if not user:
+            if not user_data:
                 send_json(
                     self,
                     401,
                     {
                         "ok": False,
-                        "error": "Telegram авторизация недействительна.",
+                        "error": (
+                            "Telegram авторизация "
+                            "недействительна."
+                        ),
                     },
                 )
                 return
 
             user_id = str(
-                user["id"]
+                user_data["id"]
             )
 
-            allowed, reason = require_access(
-                user_id
+            allowed, reason = (
+                require_access(
+                    user_id
+                )
             )
 
             if not allowed:
@@ -1018,7 +1291,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            u = bot.get_user(
+            user = bot.get_user(
                 user_id
             )
 
@@ -1030,7 +1303,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         "ok": True,
                         "state": frontend_state(
                             user_id,
-                            u,
+                            user,
                         ),
                     },
                 )
@@ -1056,10 +1329,10 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 },
             )
 
-        except Exception as e:
+        except Exception as exc:
             print(
-                "GET error:",
-                repr(e),
+                "Mini App GET error:",
+                repr(exc),
             )
 
             send_json(
@@ -1067,9 +1340,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 500,
                 {
                     "ok": False,
-                    "error": "Внутренняя ошибка сервера.",
+                    "error": (
+                        "Внутренняя ошибка сервера."
+                    ),
                 },
             )
+
+    # --------------------------------------------------------
+    # POST
+    # --------------------------------------------------------
 
     def do_POST(self):
         try:
@@ -1077,27 +1356,34 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 self.path
             ).path
 
-            user = get_user_from_request(
-                self
+            user_data = (
+                get_user_from_request(
+                    self
+                )
             )
 
-            if not user:
+            if not user_data:
                 send_json(
                     self,
                     401,
                     {
                         "ok": False,
-                        "error": "Telegram авторизация недействительна.",
+                        "error": (
+                            "Telegram авторизация "
+                            "недействительна."
+                        ),
                     },
                 )
                 return
 
             user_id = str(
-                user["id"]
+                user_data["id"]
             )
 
-            allowed, reason = require_access(
-                user_id
+            allowed, reason = (
+                require_access(
+                    user_id
+                )
             )
 
             if not allowed:
@@ -1115,24 +1401,24 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 self
             )
 
-            u = bot.get_user(
+            user = bot.get_user(
                 user_id
             )
 
-            lock = get_user_lock(
+            # Один пользователь — один одновременный
+            # изменяющий запрос.
+            with get_user_lock(
                 user_id
-            )
+            ):
 
-            with lock:
-
-                # ------------------------------------------------
+                # ============================================
                 # CHAT
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/chat":
                     result = handle_chat(
                         user_id,
-                        u,
+                        user,
                         payload,
                     )
 
@@ -1146,18 +1432,16 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     )
                     return
 
-                # ------------------------------------------------
+                # ============================================
                 # NEW CHAT
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/chat/new":
-                    requested_name = payload.get(
-                        "name"
-                    )
-
                     name = create_chat(
-                        u,
-                        requested_name,
+                        user,
+                        payload.get(
+                            "name"
+                        ),
                     )
 
                     bot.save_db()
@@ -1170,15 +1454,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "chat_id": name,
                             "state": frontend_state(
                                 user_id,
-                                u,
+                                user,
                             ),
                         },
                     )
                     return
 
-                # ------------------------------------------------
+                # ============================================
                 # SELECT CHAT
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/chat/select":
                     chat_id = str(
@@ -1188,18 +1472,24 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         )
                     )
 
-                    if chat_id not in u["chats"]:
+                    if chat_id not in user[
+                        "chats"
+                    ]:
                         send_json(
                             self,
                             404,
                             {
                                 "ok": False,
-                                "error": "Чат не найден.",
+                                "error": (
+                                    "Чат не найден."
+                                ),
                             },
                         )
                         return
 
-                    u["active_chat"] = chat_id
+                    user[
+                        "active_chat"
+                    ] = chat_id
 
                     bot.save_db()
 
@@ -1210,15 +1500,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "ok": True,
                             "state": frontend_state(
                                 user_id,
-                                u,
+                                user,
                             ),
                         },
                     )
                     return
 
-                # ------------------------------------------------
+                # ============================================
                 # RENAME CHAT
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/chat/rename":
                     chat_id = str(
@@ -1236,7 +1526,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     )
 
                     rename_chat(
-                        u,
+                        user,
                         chat_id,
                         new_name,
                     )
@@ -1250,15 +1540,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "ok": True,
                             "state": frontend_state(
                                 user_id,
-                                u,
+                                user,
                             ),
                         },
                     )
                     return
 
-                # ------------------------------------------------
+                # ============================================
                 # DELETE CHAT
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/chat/delete":
                     chat_id = str(
@@ -1269,7 +1559,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     )
 
                     delete_chat(
-                        u,
+                        user,
                         chat_id,
                     )
 
@@ -1282,21 +1572,21 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "ok": True,
                             "state": frontend_state(
                                 user_id,
-                                u,
+                                user,
                             ),
                         },
                     )
                     return
 
-                # ------------------------------------------------
+                # ============================================
                 # CLEAR CHAT
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/chat/clear":
                     chat_id = str(
                         payload.get(
                             "chat_id",
-                            u.get(
+                            user.get(
                                 "active_chat",
                                 "main",
                             ),
@@ -1304,7 +1594,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     )
 
                     clear_chat(
-                        u,
+                        user,
                         chat_id,
                     )
 
@@ -1317,15 +1607,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "ok": True,
                             "state": frontend_state(
                                 user_id,
-                                u,
+                                user,
                             ),
                         },
                     )
                     return
 
-                # ------------------------------------------------
+                # ============================================
                 # SETTINGS
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/settings":
                     if "style" in payload:
@@ -1334,17 +1624,13 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         )
 
                         if style not in STYLE_VALUES:
-                            send_json(
-                                self,
-                                400,
-                                {
-                                    "ok": False,
-                                    "error": "Неизвестный стиль.",
-                                },
+                            raise ValueError(
+                                "Неизвестный стиль."
                             )
-                            return
 
-                        u["style"] = style
+                        user[
+                            "style"
+                        ] = style
 
                     if "model" in payload:
                         model = str(
@@ -1354,24 +1640,19 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             )
                         ).strip()
 
+                        if not model:
+                            model = "auto"
+
                         if not validate_model(
                             model
                         ):
-                            send_json(
-                                self,
-                                400,
-                                {
-                                    "ok": False,
-                                    "error": "Модель недоступна.",
-                                },
+                            raise ValueError(
+                                "Модель недоступна."
                             )
-                            return
 
-                        u["model"] = (
-                            model
-                            if model
-                            else "auto"
-                        )
+                        user[
+                            "model"
+                        ] = model
 
                     bot.save_db()
 
@@ -1382,15 +1663,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "ok": True,
                             "state": frontend_state(
                                 user_id,
-                                u,
+                                user,
                             ),
                         },
                     )
                     return
 
-                # ------------------------------------------------
+                # ============================================
                 # MEMORY
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/memory":
                     action = str(
@@ -1398,10 +1679,25 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "action",
                             "",
                         )
+                    ).strip()
+
+                    memory = user.get(
+                        "memory"
                     )
 
+                    if not isinstance(
+                        memory,
+                        dict,
+                    ):
+                        memory = {}
+                        user[
+                            "memory"
+                        ] = memory
+
                     if action == "clear":
-                        u["memory"] = {}
+                        user[
+                            "memory"
+                        ] = {}
 
                     elif action == "set":
                         key = str(
@@ -1423,9 +1719,11 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                                 "Ключ памяти пуст."
                             )
 
-                        u["memory"][
+                        user[
+                            "memory"
+                        ][
                             key[:100]
-                        ] = value[:1000]
+                        ] = value[:2000]
 
                     elif action == "delete":
                         key = str(
@@ -1435,10 +1733,24 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             )
                         ).strip()
 
-                        u["memory"].pop(
+                        user[
+                            "memory"
+                        ].pop(
                             key,
                             None,
                         )
+
+                    elif isinstance(
+                        payload.get(
+                            "memory"
+                        ),
+                        dict,
+                    ):
+                        user[
+                            "memory"
+                        ] = payload[
+                            "memory"
+                        ]
 
                     bot.save_db()
 
@@ -1449,15 +1761,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "ok": True,
                             "state": frontend_state(
                                 user_id,
-                                u,
+                                user,
                             ),
                         },
                     )
                     return
 
-                # ------------------------------------------------
+                # ============================================
                 # STATS
-                # ------------------------------------------------
+                # ============================================
 
                 if path == "/api/stats":
                     send_json(
@@ -1467,19 +1779,19 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                             "ok": True,
                             "stats": {
                                 "requests": int(
-                                    u.get(
+                                    user.get(
                                         "requests",
                                         0,
                                     )
                                 ),
                                 "errors": int(
-                                    u.get(
+                                    user.get(
                                         "errors",
                                         0,
                                     )
                                 ),
                                 "chats": len(
-                                    u.get(
+                                    user.get(
                                         "chats",
                                         {},
                                     )
@@ -1510,43 +1822,42 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     },
                 )
 
-        except ValueError as e:
+        except ValueError as exc:
             send_json(
                 self,
                 400,
                 {
                     "ok": False,
-                    "error": str(e),
+                    "error": str(exc),
                 },
             )
 
-        except RuntimeError as e:
+        except RuntimeError as exc:
             send_json(
                 self,
                 500,
                 {
                     "ok": False,
-                    "error": str(e),
+                    "error": str(exc),
                 },
             )
 
-        except Exception as e:
+        except Exception as exc:
             print(
-                "POST error:",
-                repr(e),
+                "Mini App POST error:",
+                repr(exc),
             )
 
-            try:
-                send_json(
-                    self,
-                    500,
-                    {
-                        "ok": False,
-                        "error": "Внутренняя ошибка сервера.",
-                    },
-                )
-            except Exception:
-                pass
+            send_json(
+                self,
+                500,
+                {
+                    "ok": False,
+                    "error": (
+                        "Внутренняя ошибка сервера."
+                    ),
+                },
+            )
 
 
 # ============================================================
@@ -1554,7 +1865,10 @@ class MiniAppHandler(BaseHTTPRequestHandler):
 # ============================================================
 
 def run_server():
-    bot.load_db()
+    # ВАЖНО:
+    # bot.load_db() здесь НЕ вызываем.
+    # База уже загружается launcher.py перед запуском
+    # Telegram и Mini App.
 
     server = ThreadingHTTPServer(
         (HOST, PORT),
@@ -1562,11 +1876,14 @@ def run_server():
     )
 
     print(
-        f"BulbaMaxAI Mini App server listening on {HOST}:{PORT}"
+        f"BulbaMaxAI Mini App server started on "
+        f"{HOST}:{PORT}"
     )
 
     try:
         server.serve_forever()
+    except KeyboardInterrupt:
+        pass
     finally:
         server.server_close()
 
