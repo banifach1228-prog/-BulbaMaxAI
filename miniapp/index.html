@@ -1,1759 +1,1025 @@
 <!doctype html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#09090b">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0b0b0f">
+<meta name="color-scheme" content="dark">
 <title>Bulba AI</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{--bg:#09090b;--panel:#111114;--panel2:#17171b;--line:rgba(255,255,255,.09);--text:#f5f5f7;--muted:#8c8c95;--user:#202024;--danger:#ff5c5c;--ok:#66d18f}
+:root{
+  --bg:#0b0b0f;
+  --panel:#121218;
+  --panel2:#181820;
+  --line:rgba(255,255,255,.08);
+  --text:#f5f5f7;
+  --muted:#9898a3;
+  --accent:#fff;
+  --accentText:#000;
+  --danger:#ff5f57;
+  --safe-top:env(safe-area-inset-top);
+  --safe-bottom:env(safe-area-inset-bottom);
+}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",Arial,sans-serif}
-button,input,textarea{font:inherit}
-button{border:0;background:none;color:inherit;outline:0}
-#app{height:100%;display:flex;flex-direction:column;background:radial-gradient(circle at 50% -20%,rgba(255,255,255,.07),transparent 36%),var(--bg)}
-
-.topbar{height:64px;min-height:64px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line);background:rgba(9,9,11,.84);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);z-index:5}
-.brand{display:flex;align-items:center;gap:10px;min-width:0}
-.logo,.welcomeLogo{display:grid;place-items:center;background:#f5f5f7;color:#08080a;font-weight:900;box-shadow:0 10px 35px rgba(255,255,255,.08)}
-.logo{width:39px;height:39px;border-radius:13px;font-size:19px}
-.brandName{font-size:16px;font-weight:800}
-.status{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11px;margin-top:2px}
-.dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px rgba(102,209,143,.55)}
-.topActions{display:flex;gap:7px}
-.iconBtn,.modelBtn{height:40px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.035);display:flex;align-items:center;justify-content:center}
-.iconBtn{width:40px;font-size:20px}
-.modelBtn{max-width:145px;padding:0 11px;gap:6px;font-size:12px;font-weight:700}
-.modelName{max-width:105px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-#chat{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 13px 12px;-webkit-overflow-scrolling:touch;scroll-behavior:smooth}
-#chat::-webkit-scrollbar{width:0}
-.welcome{min-height:calc(100% - 15px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:25px}
-.welcomeLogo{width:68px;height:68px;border-radius:22px;font-size:30px;margin-bottom:18px}
-.welcome h1{margin:0;font-size:28px;letter-spacing:-1px}
-.welcome p{max-width:320px;margin:9px 0 0;color:var(--muted);line-height:1.45;font-size:14px}
-.suggestions{width:100%;max-width:400px;display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:22px}
-.suggestion{padding:13px;text-align:left;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.025);color:#ddd;font-size:12px;line-height:1.35}
-.messageRow{display:flex;width:100%;margin-bottom:15px}
-.messageRow.user{justify-content:flex-end}
-.messageRow.assistant{justify-content:flex-start}
-.bubble{max-width:min(90%,760px);padding:11px 14px;border-radius:18px;font-size:15px;line-height:1.5;overflow-wrap:anywhere}
-.user .bubble{background:var(--user);border:1px solid rgba(255,255,255,.055);border-bottom-right-radius:6px;white-space:pre-wrap}
-.assistant .bubble{padding:4px 2px;background:transparent}
-.photo{display:block;max-width:270px;max-height:360px;border-radius:15px;margin-bottom:7px;border:1px solid var(--line);object-fit:cover}
-.copyBtn{display:block;margin-top:8px;color:#77777f;font-size:11px}
-.copyBtn:active{color:#fff}
-.md p{margin:0 0 9px}
-.md p:last-child{margin-bottom:0}
-.md strong{font-weight:800}
-.md code{padding:2px 5px;border-radius:6px;background:#1b1b20;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}
-.md pre{margin:9px 0;padding:11px;overflow:auto;border-radius:12px;background:#151519;border:1px solid var(--line);white-space:pre}
-.md ul,.md ol{margin:7px 0 9px;padding-left:21px}
-.md a{color:#dcdce1;text-decoration:underline}
-.typing{display:flex;gap:4px;padding:9px 2px}
-.typing span{width:6px;height:6px;border-radius:50%;background:#77777f;animation:pulse 1.1s infinite ease-in-out}
-.typing span:nth-child(2){animation-delay:.15s}
-.typing span:nth-child(3){animation-delay:.3s}
-@keyframes pulse{0%,70%,100%{transform:scale(.7);opacity:.35}35%{transform:scale(1);opacity:1}}
-
-.composerWrap{padding:7px 9px calc(9px + env(safe-area-inset-bottom));background:linear-gradient(to top,rgba(9,9,11,1) 75%,rgba(9,9,11,0))}
-.preview{display:none;padding:0 4px 8px}
-.preview.show{display:block}
-.previewBox{position:relative;width:76px;height:76px}
-.preview img{width:76px;height:76px;object-fit:cover;border-radius:15px;border:1px solid var(--line)}
-.removePhoto{position:absolute;top:-6px;right:-6px;width:23px;height:23px;border-radius:50%;background:#242428;border:1px solid rgba(255,255,255,.12);font-size:14px}
-.composer{min-height:54px;display:flex;align-items:flex-end;gap:7px;padding:7px;border:1px solid var(--line);border-radius:19px;background:rgba(18,18,21,.96);box-shadow:0 12px 40px rgba(0,0,0,.35)}
-.attach{width:40px;height:40px;flex:0 0 40px;border-radius:13px;color:#a3a3aa;font-size:21px}
-.attach:active{background:rgba(255,255,255,.07)}
-#input{flex:1;min-height:40px;max-height:150px;resize:none;outline:0;border:0;background:transparent;color:var(--text);padding:10px 4px 9px;line-height:1.35;font-size:15px}
-#input::placeholder{color:#67676f}
-.send{width:40px;height:40px;flex:0 0 40px;border-radius:13px;display:grid;place-items:center;background:#f5f5f7;color:#09090b;font-size:18px;font-weight:900}
-.send:disabled{opacity:.3}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",Arial,sans-serif}
+body{min-height:100vh;padding-bottom:calc(84px + var(--safe-bottom));overflow-x:hidden}
+button,input,textarea,select{font:inherit}
+button{border:0;color:inherit}
+.hidden{display:none!important}
+.app{max-width:760px;margin:0 auto}
+.top{
+  position:sticky;top:0;z-index:20;
+  padding:calc(12px + var(--safe-top)) 14px 12px;
+  background:rgba(11,11,15,.86);
+  backdrop-filter:blur(22px);
+  -webkit-backdrop-filter:blur(22px);
+  border-bottom:1px solid var(--line);
+}
+.toprow{display:flex;align-items:center;gap:10px}
+.brand{font-size:18px;font-weight:800;letter-spacing:-.3px;cursor:pointer}
+.status{font-size:11px;color:var(--muted);margin-top:3px}
+.topspacer{flex:1}
+.iconbtn{
+  width:40px;height:40px;border-radius:13px;background:var(--panel2);
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  border:1px solid var(--line);font-size:18px
+}
+.badge{
+  position:absolute;right:8px;top:6px;width:8px;height:8px;border-radius:50%;
+  background:#fff
+}
+main{padding:18px 14px 0}
+.hero{text-align:center;padding:45px 10px 20px}
+.logo{
+  width:70px;height:70px;border-radius:22px;background:#fff;color:#000;
+  margin:0 auto 18px;display:flex;align-items:center;justify-content:center;
+  font-size:30px;font-weight:900;box-shadow:0 12px 35px rgba(255,255,255,.08)
+}
+.hero h1{font-size:27px;margin:0 0 8px;letter-spacing:-.8px}
+.hero p{margin:0 auto;color:var(--muted);max-width:520px;line-height:1.5}
+.suggestions{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:20px 0}
+.chip{
+  background:var(--panel2);border:1px solid var(--line);border-radius:18px;
+  padding:9px 13px;font-size:13px;cursor:pointer
+}
+.chat{display:flex;flex-direction:column;gap:10px;padding-bottom:20px}
+.msg{display:flex;flex-direction:column;max-width:88%;gap:4px}
+.msg.user{align-self:flex-end;align-items:flex-end}
+.msg.assistant{align-self:flex-start;align-items:flex-start}
+.bubble{
+  padding:12px 14px;border-radius:18px;background:var(--panel2);
+  line-height:1.48;white-space:pre-wrap;word-break:break-word;
+  border:1px solid var(--line)
+}
+.msg.user .bubble{
+  background:#fff;color:#000;border-color:#fff;border-bottom-right-radius:6px
+}
+.msg.assistant .bubble{border-bottom-left-radius:6px}
+.meta{font-size:10px;color:var(--muted);padding:0 4px}
+.msg .secondary{margin-top:1px}
+.composerWrap{
+  position:fixed;left:0;right:0;bottom:0;z-index:30;
+  padding:8px 12px calc(8px + var(--safe-bottom));
+  background:rgba(11,11,15,.9);
+  backdrop-filter:blur(22px);
+  -webkit-backdrop-filter:blur(22px);
+  border-top:1px solid var(--line)
+}
+.composer{max-width:760px;margin:auto;display:flex;align-items:flex-end;gap:8px}
+.inputBox{
+  flex:1;display:flex;align-items:flex-end;gap:6px;
+  background:var(--panel2);border:1px solid var(--line);border-radius:20px;
+  padding:7px 8px 7px 13px
+}
+textarea{
+  width:100%;resize:none;outline:none;border:0;background:transparent;color:var(--text);
+  min-height:24px;max-height:130px;line-height:1.4;padding:5px 0
+}
+textarea::placeholder{color:#777782}
+.circle{
+  width:40px;height:40px;border-radius:50%;background:#fff;color:#000;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;
+  font-size:17px;font-weight:700
+}
+.circle:disabled{opacity:.35;cursor:default}
+.attach{
+  width:38px;height:38px;border-radius:12px;background:transparent;
+  color:var(--muted);display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:19px;flex:none
+}
 #file{display:none}
-
-.overlay{position:fixed;inset:0;z-index:50;display:none;background:rgba(0,0,0,.58);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
-.overlay.show{display:block}
-.sheet{position:absolute;left:0;right:0;bottom:0;max-height:84%;overflow-y:auto;background:#111114;border-top:1px solid var(--line);border-radius:24px 24px 0 0;padding:12px 14px calc(20px + env(safe-area-inset-bottom));animation:sheetIn .18s ease-out}
-@keyframes sheetIn{from{transform:translateY(25px);opacity:.5}to{transform:translateY(0);opacity:1}}
-.handle{width:38px;height:4px;border-radius:99px;background:#39393e;margin:0 auto 15px}
-.sheetTitle{font-size:18px;font-weight:800;margin-bottom:11px}
-.sheetSub{color:var(--muted);font-size:12px;margin:-5px 0 12px}
-.rowBtn,.chatItem,.modelOption,.styleOption{width:100%;min-height:50px;padding:10px 12px;margin-bottom:7px;border-radius:15px;border:1px solid var(--line);background:rgba(255,255,255,.025);display:flex;align-items:center;justify-content:space-between;text-align:left}
-.rowBtn:active,.chatItem:active,.modelOption:active,.styleOption:active{background:rgba(255,255,255,.08)}
-.selected{background:rgba(255,255,255,.09)!important;border-color:rgba(255,255,255,.18)!important}
-.itemTitle{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.itemMeta{font-size:11px;color:var(--muted);margin-top:3px}
-.itemLeft{min-width:0}
-.check{font-weight:900}
+.filePreview{
+  display:none;max-width:760px;margin:0 auto 6px;
+  padding:8px 12px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:13px;font-size:12px
+}
+.filePreview.show{display:flex;align-items:center;gap:8px}
+.filePreview .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sheet{
+  position:fixed;inset:0;z-index:50;display:none;align-items:flex-end;
+  background:rgba(0,0,0,.5)
+}
+.sheet.show{display:flex}
+.sheetCard{
+  width:100%;max-height:88vh;overflow:auto;background:var(--panel);
+  border-top-left-radius:25px;border-top-right-radius:25px;
+  padding:10px 14px calc(18px + var(--safe-bottom));
+  border-top:1px solid var(--line)
+}
+.grab{width:42px;height:5px;border-radius:5px;background:#444;margin:3px auto 12px}
+.sheetHead{display:flex;align-items:center;margin-bottom:15px}
+.sheetHead h2{margin:0;font-size:20px;letter-spacing:-.4px}
+.close{margin-left:auto;width:34px;height:34px;border-radius:50%;background:var(--panel2);cursor:pointer}
+.sectionTitle{font-size:12px;color:var(--muted);margin:18px 2px 8px}
+.card{
+  background:var(--panel2);border:1px solid var(--line);border-radius:16px;
+  padding:13px;margin-bottom:8px;line-height:1.45
+}
+.row{
+  width:100%;display:flex;align-items:center;gap:12px;text-align:left;
+  padding:13px;border-radius:15px;background:var(--panel2);
+  border:1px solid var(--line);margin-bottom:8px;cursor:pointer
+}
+.row .grow{flex:1;min-width:0}
+.row b{display:block;font-size:14px}
+.row small{display:block;color:var(--muted);font-size:11px;margin-top:3px;overflow:hidden;text-overflow:ellipsis}
+.arrow{color:var(--muted);font-size:20px}
+.field{
+  width:100%;background:var(--panel2);border:1px solid var(--line);
+  color:var(--text);border-radius:14px;padding:12px;outline:none;margin-bottom:8px
+}
+textarea.field{min-height:90px;resize:vertical}
+.primary,.secondary{
+  width:100%;padding:12px;border-radius:14px;cursor:pointer;margin-bottom:8px;
+  font-weight:700
+}
+.primary{background:#fff;color:#000}
+.secondary{background:var(--panel2);border:1px solid var(--line)}
 .danger{color:var(--danger)}
-.sheetActions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}
-.textInput{width:100%;height:46px;margin:4px 0 8px;padding:0 13px;border:1px solid var(--line);border-radius:13px;outline:0;background:#18181c;color:var(--text)}
-.memoryItem{padding:10px 12px;border:1px solid var(--line);border-radius:13px;margin-bottom:7px;background:rgba(255,255,255,.025)}
-.memoryKey{font-size:12px;font-weight:800}
-.memoryValue{font-size:12px;color:#bbb;margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere}
-
-#toast{position:fixed;left:50%;bottom:calc(86px + env(safe-area-inset-bottom));transform:translate(-50%,15px);z-index:100;max-width:88%;padding:10px 14px;border-radius:13px;background:#242428;border:1px solid var(--line);color:#fff;font-size:12px;text-align:center;opacity:0;pointer-events:none;transition:.18s}
-#toast.show{opacity:1;transform:translate(-50%,0)}
+.empty{text-align:center;color:var(--muted);padding:20px}
+.typing{
+  display:none;align-items:center;gap:5px;color:var(--muted);font-size:12px;
+  padding:4px 8px
+}
+.typing.show{display:flex}
+.dot{width:5px;height:5px;border-radius:50%;background:#777;animation:pulse 1s infinite alternate}
+.dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+@keyframes pulse{from{opacity:.25}to{opacity:1}}
+.nav{
+  position:fixed;left:0;right:0;bottom:0;z-index:25;
+  padding:8px 12px calc(8px + var(--safe-bottom));
+  pointer-events:none
+}
+.navinner{
+  max-width:760px;margin:auto;display:flex;gap:6px;padding:6px;
+  background:rgba(24,24,32,.94);border:1px solid var(--line);
+  border-radius:20px;box-shadow:0 10px 40px rgba(0,0,0,.3);
+  pointer-events:auto;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)
+}
+.nav button{
+  flex:1;background:transparent;color:var(--muted);padding:8px 5px;
+  border-radius:14px;cursor:pointer;font-size:11px
+}
+.nav button.active{background:#fff;color:#000}
+.navIcon{font-size:17px;display:block;margin-bottom:2px}
 @media(min-width:700px){
-.topbar{padding-left:24px;padding-right:24px}
-#chat{padding-left:max(14px,calc((100% - 850px)/2));padding-right:max(14px,calc((100% - 850px)/2))}
-.composerWrap{padding-left:max(10px,calc((100% - 850px)/2));padding-right:max(10px,calc((100% - 850px)/2))}
+  .composerWrap{padding-bottom:14px}
+  .nav{bottom:10px}
 }
 </style>
 </head>
-
 <body>
-<div id="app">
+<div class="app">
+  <header class="top">
+    <div class="toprow">
+      <div id="brand" class="brand">Bulba AI<div id="status" class="status">Подключение…</div></div>
+      <div class="topspacer"></div>
+      <button class="iconbtn" id="profileBtn">◉</button>
+    </div>
+  </header>
 
-<header class="topbar">
-<div class="brand">
-<div class="logo">B</div>
-<div>
-<div class="brandName">Bulba AI</div>
-<div class="status"><span class="dot"></span><span id="statusText">Online</span></div>
+  <main>
+    <section id="hero" class="hero">
+      <div class="logo">B</div>
+      <h1>Bulba AI</h1>
+      <p>Единый AI-помощник для чатов, файлов, памяти, расчётов и других задач.</p>
+    </section>
+
+    <div id="suggestions" class="suggestions">
+      <button class="chip" data-q="Объясни простыми словами">Объясни</button>
+      <button class="chip" data-q="Сделай краткий план">Сделай план</button>
+      <button class="chip" data-q="Реши задачу и покажи решение">Реши задачу</button>
+      <button class="chip" data-q="Проверь мой текст на ошибки">Проверь текст</button>
+    </div>
+
+    <div id="chat" class="chat"></div>
+
+    <div id="typing" class="typing">
+      <span>Bulba AI думает</span><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+    </div>
+  </main>
 </div>
+
+<div class="filePreview" id="filePreview">
+  <div>📎</div>
+  <div class="grow" id="fileName"></div>
+  <button class="close" id="removeFile">×</button>
 </div>
-
-<div class="topActions">
-<button class="modelBtn" id="modelButton">
-<span class="modelName" id="modelName">Auto</span>
-<span>⌄</span>
-</button>
-<button class="iconBtn" id="newChat" aria-label="Новый чат">＋</button>
-</div>
-</header>
-
-<main id="chat">
-
-<section class="welcome" id="welcome">
-<div class="welcomeLogo">B</div>
-<h1>Bulba AI</h1>
-<p>AI внутри Telegram — модели, изображения, память и полноценные чаты.</p>
-
-<div class="suggestions">
-<button class="suggestion" data-suggestion="Объясни мне сложную тему простыми словами">Объясни сложную тему</button>
-<button class="suggestion" data-suggestion="Помоги мне решить задачу и объясни решение">Помоги с задачей</button>
-<button class="suggestion" data-suggestion="Проанализируй мою идею и предложи улучшения">Разбери мою идею</button>
-<button class="suggestion" data-suggestion="Что ты умеешь?">Что ты умеешь?</button>
-</div>
-</section>
-
-<div id="messages"></div>
-
-</main>
 
 <div class="composerWrap">
-
-<div class="preview" id="preview">
-<div class="previewBox">
-<img id="previewImage" alt="Фото">
-<button class="removePhoto" id="removePhoto">×</button>
-</div>
-</div>
-
-<div class="composer">
-<button class="attach" id="attach" aria-label="Добавить фото">＋</button>
-
-<textarea
-id="input"
-rows="1"
-maxlength="12000"
-placeholder="Сообщение..."
-></textarea>
-
-<button class="send" id="send" aria-label="Отправить">↑</button>
+  <div class="composer">
+    <div class="inputBox">
+      <button class="attach" id="attach">＋</button>
+      <textarea id="input" rows="1" placeholder="Сообщение…"></textarea>
+    </div>
+    <button class="circle" id="send">↑</button>
+  </div>
 </div>
 
-</div>
-</div>
+<input type="file" id="file" accept="image/*,.pdf,.docx,.xlsx,.csv,.txt,.md,.json,.log,.py,.js,.html,.css">
 
-<input id="file" type="file" accept="image/*">
+<nav class="nav">
+  <div class="navinner">
+    <button data-tab="chatTab" class="active"><span class="navIcon">⌂</span>Чат</button>
+    <button data-tab="chatsTab"><span class="navIcon">▤</span>Чаты</button>
+    <button data-tab="memoryTab"><span class="navIcon">◆</span>Память</button>
+    <button data-tab="settingsTab"><span class="navIcon">⚙</span>Настройки</button>
+  </div>
+</nav>
 
-<div class="overlay" id="overlay">
 <div class="sheet" id="sheet">
-<div class="handle"></div>
-<div class="sheetTitle" id="sheetTitle"></div>
-<div id="sheetContent"></div>
-</div>
+  <div class="sheetCard" id="sheetCard"></div>
 </div>
 
-<div id="toast"></div>
+<div id="toast" style="
+position:fixed;left:50%;bottom:calc(94px + var(--safe-bottom));transform:translateX(-50%);
+background:#fff;color:#000;padding:10px 15px;border-radius:14px;font-size:12px;
+font-weight:700;opacity:0;pointer-events:none;transition:.2s;z-index:100;white-space:nowrap">
+</div>
 
 <script>
-(() => {
-"use strict";
+(()=>{
+'use strict';
 
-const tg = window.Telegram?.WebApp;
+const tg=window.Telegram?.WebApp;
+try{tg?.ready();tg?.expand()}catch{}
 
-const $ = id => document.getElementById(id);
+const $=id=>document.getElementById(id);
+const chat=$('chat');
+const input=$('input');
+const send=$('send');
+const file=$('file');
+const sheet=$('sheet');
+const sheetCard=$('sheetCard');
+const toastEl=$('toast');
 
-const chat = $("chat");
-const messages = $("messages");
-const welcome = $("welcome");
-const input = $("input");
-const send = $("send");
-const file = $("file");
-const preview = $("preview");
-const previewImage = $("previewImage");
-const overlay = $("overlay");
-const sheetTitle = $("sheetTitle");
-const sheetContent = $("sheetContent");
-const toastBox = $("toast");
-
-const S = {
-model:"auto",
-style:"normal",
-activeChat:"main",
-chats:[],
-memory:{},
-requests:0,
-errors:0,
-models:[],
-image:null,
-sending:false,
-booted:false
+const S={
+  init:tg?.initData||'',
+  state:null,
+  models:[],
+  file:null,
+  sending:false
 };
 
-function haptic(type="light"){
-try{
-if(tg?.HapticFeedback){
-if(type==="medium") tg.HapticFeedback.impactOccurred("medium");
-else if(type==="heavy") tg.HapticFeedback.impactOccurred("heavy");
-else tg.HapticFeedback.impactOccurred("light");
-}
-}catch(e){}
-}
-
-function toast(text){
-toastBox.textContent=String(text||"");
-toastBox.classList.add("show");
-clearTimeout(toast._timer);
-toast._timer=setTimeout(
-()=>toastBox.classList.remove("show"),
-2600
-);
+function esc(v){
+  return String(v??'')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
 }
 
-function initData(){
-return tg?.initData||"";
+function toast(t){
+  toastEl.textContent=t;
+  toastEl.classList.add('show');
+  clearTimeout(toast.t);
+  toast.t=setTimeout(()=>toastEl.classList.remove('show'),2300);
 }
 
-function api(path,options={}){
-const controller=new AbortController();
-const timeout=setTimeout(
-()=>controller.abort(),
-options.timeout||30000
-);
+const style=document.createElement('style');
+style.textContent='.show{opacity:1!important}';
+document.head.appendChild(style);
 
-const headers={
-"Content-Type":"application/json",
-"X-Telegram-Init-Data":initData(),
-...(options.headers||{})
-};
-
-return fetch(path,{
-...options,
-headers,
-signal:controller.signal
-})
-.then(async response=>{
-clearTimeout(timeout);
-
-let data=null;
-
-try{
-data=await response.json();
-}catch(e){
-throw new Error(
-"Сервер вернул некорректный ответ."
-);
+function haptic(type='light'){
+  try{tg?.HapticFeedback?.impactOccurred(type)}catch{}
 }
 
-if(!response.ok||data?.ok===false){
-throw new Error(
-data?.error||
-`Ошибка сервера: ${response.status}`
-);
-}
+async function api(path,opt={}){
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),opt.timeout||35000);
 
-return data;
-})
-.catch(error=>{
-clearTimeout(timeout);
-throw error;
-});
-}
+  try{
+    const r=await fetch(path,{
+      ...opt,
+      headers:{
+        'Content-Type':'application/json',
+        'X-Telegram-Init-Data':S.init,
+        ...(opt.headers||{})
+      },
+      signal:ctrl.signal
+    });
 
-function escapeHtml(value){
-return String(value??"")
-.replace(/&/g,"&amp;")
-.replace(/</g,"&lt;")
-.replace(/>/g,"&gt;")
-.replace(/"/g,"&quot;")
-.replace(/'/g,"&#039;");
-}
+    const d=await r.json().catch(()=>({error:'Некорректный ответ сервера'}));
 
-function renderMarkdown(text){
-let s=escapeHtml(text||"");
+    if(!r.ok)throw new Error(d.error||d.message||'Ошибка сервера');
 
-const blocks=[];
-
-s=s.replace(
-/```([\s\S]*?)```/g,
-(_,code)=>{
-const token=`@@CODEBLOCK${blocks.length}@@`;
-blocks.push(
-`<pre><code>${code.trim()}</code></pre>`
-);
-return token;
-}
-);
-
-s=s.replace(
-/`([^`\n]+)`/g,
-"<code>$1</code>"
-);
-
-s=s.replace(
-/\*\*([^*]+)\*\*/g,
-"<strong>$1</strong>"
-);
-
-s=s.replace(
-/\*([^*\n]+)\*/g,
-"<em>$1</em>"
-);
-
-s=s.replace(
-/^### (.+)$/gm,
-"<h3>$1</h3>"
-);
-
-s=s.replace(
-/^## (.+)$/gm,
-"<h2>$1</h2>"
-);
-
-s=s.replace(
-/^# (.+)$/gm,
-"<h1>$1</h1>"
-);
-
-s=s.replace(
-/^\s*[-•]\s+(.+)$/gm,
-"<li>$1</li>"
-);
-
-s=s.replace(
-/(<li>.*<\/li>)/gs,
-"<ul>$1</ul>"
-);
-
-s=s.replace(
-/\n{2,}/g,
-"</p><p>"
-);
-
-s=s.replace(
-/\n/g,
-"<br>"
-);
-
-s="<p>"+s+"</p>";
-
-s=s.replace(
-/<p>(@@CODEBLOCK\d+@@)<\/p>/g,
-"$1"
-);
-
-s=s.replace(
-/@@CODEBLOCK(\d+)@@/g,
-(_,i)=>blocks[Number(i)]
-);
-
-return s;
-}
-
-function renderMessage(
-role,
-text,
-image=null
-){
-const row=document.createElement("div");
-row.className=`messageRow ${role}`;
-
-const bubble=document.createElement("div");
-bubble.className="bubble";
-
-if(image){
-const img=document.createElement("img");
-img.className="photo";
-img.src=image;
-img.alt="Изображение";
-bubble.appendChild(img);
-}
-
-if(text){
-if(role==="assistant"){
-const md=document.createElement("div");
-md.className="md";
-md.innerHTML=renderMarkdown(text);
-bubble.appendChild(md);
-}else{
-const textNode=document.createElement("div");
-textNode.textContent=text;
-bubble.appendChild(textNode);
-}
-}
-
-if(role==="assistant"&&text){
-const copy=document.createElement("button");
-copy.className="copyBtn";
-copy.textContent="Скопировать";
-copy.onclick=async()=>{
-try{
-await navigator.clipboard.writeText(text);
-copy.textContent="Скопировано ✓";
-setTimeout(
-()=>copy.textContent="Скопировать",
-1400
-);
-haptic("light");
-}catch(e){
-toast("Не удалось скопировать.");
-}
-};
-bubble.appendChild(copy);
-}
-
-row.appendChild(bubble);
-messages.appendChild(row);
-
-scrollBottom();
-}
-
-function scrollBottom(){
-requestAnimationFrame(()=>{
-chat.scrollTop=chat.scrollHeight;
-});
-}
-
-function typing(show){
-const old=$("typing");
-
-if(!show){
-if(old) old.remove();
-return;
-}
-
-if(old)return;
-
-const row=document.createElement("div");
-row.id="typing";
-row.className="messageRow assistant";
-
-row.innerHTML=`
-<div class="typing">
-<span></span>
-<span></span>
-<span></span>
-</div>
-`;
-
-messages.appendChild(row);
-scrollBottom();
-}
-
-function renderHistory(){
-messages.innerHTML="";
-
-const current=S.chats.find(
-c=>String(c.id)===String(S.activeChat)
-);
-
-if(!current||!current.messages?.length){
-welcome.style.display="flex";
-return;
-}
-
-welcome.style.display="none";
-
-for(const message of current.messages){
-renderMessage(
-message.role,
-message.content||"",
-null
-);
-}
-}
-
-function applyState(state){
-if(!state)return;
-
-S.model=state.model||"auto";
-S.style=state.style||"normal";
-S.activeChat=String(
-state.active_chat||"main"
-);
-S.chats=Array.isArray(state.chats)
-?state.chats
-:[];
-S.memory=state.memory||{};
-S.requests=Number(state.requests||0);
-S.errors=Number(state.errors||0);
-
-updateModelName();
-renderHistory();
-updateSend();
-}
-
-function updateModelName(){
-let name=S.model;
-
-if(name==="auto"){
-name="Auto";
-}
-
-$("modelName").textContent=name;
-}
-
-function resize(){
-input.style.height="auto";
-input.style.height=
-Math.min(
-input.scrollHeight,
-150
-)+"px";
-}
-
-function updateSend(){
-send.disabled=
-S.sending||
-(
-!input.value.trim()&&
-!S.image
-);
-}
-
-function openSheet(title,html){
-sheetTitle.textContent=title;
-sheetContent.innerHTML=html;
-overlay.classList.add("show");
+    return d;
+  }finally{
+    clearTimeout(timer);
+  }
 }
 
 function closeSheet(){
-overlay.classList.remove("show");
+  sheet.classList.remove('show');
+  sheetCard.innerHTML='';
 }
 
-function modelSheet(){
-let html=`
-<div class="sheetSub">
-Выбери модель или оставь Auto.
-</div>
-`;
+function openSheet(title,html){
+  sheetCard.innerHTML=
+    `<div class="grab"></div>
+     <div class="sheetHead">
+       <h2>${esc(title)}</h2>
+       <button class="close" id="closeSheet">×</button>
+     </div>${html}`;
 
-html+=`
-<button
-class="modelOption ${S.model==="auto"?"selected":""}"
-data-model="auto"
->
-<div class="itemLeft">
-<div class="itemTitle">⚡ Auto</div>
-<div class="itemMeta">Bulba AI выберет доступную модель</div>
-</div>
-<span class="check">${S.model==="auto"?"✓":""}</span>
-</button>
-`;
-
-for(const model of S.models){
-const id=String(model.id||"");
-
-html+=`
-<button
-class="modelOption ${S.model===id?"selected":""}"
-data-model="${escapeHtml(id)}"
->
-<div class="itemLeft">
-<div class="itemTitle">${escapeHtml(model.name||id)}</div>
-<div class="itemMeta">${escapeHtml(id)}</div>
-</div>
-<span class="check">${S.model===id?"✓":""}</span>
-</button>
-`;
+  sheet.classList.add('show');
+  $('closeSheet').onclick=closeSheet;
 }
 
-openSheet(
-"🧠 Модель",
-html
-);
-
-sheetContent
-.querySelectorAll("[data-model]")
-.forEach(button=>{
-button.onclick=async()=>{
-try{
-const m=button.dataset.model;
-
-const d=await api(
-"/api/settings",
-{
-method:"POST",
-body:JSON.stringify({
-model:m
-})
-}
-);
-
-applyState(d.state);
-closeSheet();
-haptic("light");
-
-}catch(e){
-toast(e.message);
-}
-};
-});
-}
-
-function chatsSheet(){
-let html=`
-<button class="rowBtn" id="sheetNewChat">
-<span class="itemTitle">＋ Новый чат</span>
-<span>›</span>
-</button>
-`;
-
-if(!S.chats.length){
-html+=`
-<div class="sheetSub">
-Чатов пока нет.
-</div>
-`;
-}
-
-for(const c of S.chats){
-
-html+=`
-<div
-class="chatItem ${String(c.id)===String(S.activeChat)?"selected":""}"
-data-chat="${escapeHtml(c.id)}"
->
-<div class="itemLeft">
-<div class="itemTitle">
-${escapeHtml(c.title||"Новый чат")}
-</div>
-<div class="itemMeta">
-${Number(c.requests||0)} запросов
-</div>
-</div>
-<span>›</span>
-</div>
-`;
-}
-
-openSheet(
-"💬 Чаты",
-html
-);
-
-$("sheetNewChat").onclick=()=>{
-newChat(true);
+sheet.onclick=e=>{
+  if(e.target===sheet)closeSheet();
 };
 
-sheetContent
-.querySelectorAll("[data-chat]")
-.forEach(el=>{
-el.onclick=()=>{
-chatActions(
-el.dataset.chat
-);
-};
-});
+function applyState(state){
+  S.state=state;
+
+  $('status').textContent=
+    `${state.version} • ${state.license?.active?'доступ активен':'доступ ограничен'}`;
+
+  renderChat(
+    ((state.chats||[]).find(c=>String(c.id)===String(state.active_chat))||{}).messages||[]
+  );
+
+  updateSend();
 }
 
-function chatActions(id){
-const c=S.chats.find(
-x=>String(x.id)===String(id)
-);
+function renderChat(history){
+  chat.innerHTML='';
 
-if(!c)return;
+  if(!history.length){
+    $('hero').classList.remove('hidden');
+    $('suggestions').classList.remove('hidden');
+    return;
+  }
 
-openSheet(
-c.title||"Чат",
-`
-<div class="sheetSub">
-Управление чатом
-</div>
+  $('hero').classList.add('hidden');
+  $('suggestions').classList.add('hidden');
 
-<button class="rowBtn" id="selectChat">
-<span>Открыть</span>
-<span>›</span>
-</button>
+  for(const m of history){
+    if(!['user','assistant'].includes(m.role))continue;
+    addBubble(m.role,m.content,false);
+  }
 
-<button class="rowBtn" id="renameChat">
-<span>✏️ Переименовать</span>
-<span>›</span>
-</button>
-
-<button class="rowBtn" id="clearChat">
-<span>🧹 Очистить историю</span>
-<span>›</span>
-</button>
-
-<button class="rowBtn danger" id="deleteChat">
-<span>🗑 Удалить чат</span>
-<span>›</span>
-</button>
-`
-);
-
-$("selectChat").onclick=async()=>{
-try{
-
-const d=await api(
-"/api/chat/select",
-{
-method:"POST",
-body:JSON.stringify({
-chat_id:id
-})
-}
-);
-
-applyState(d.state);
-closeSheet();
-haptic("light");
-
-}catch(e){
-toast(e.message);
-}
-};
-
-$("renameChat").onclick=()=>{
-renameChat(id);
-};
-
-$("clearChat").onclick=()=>{
-clearChatHistory(id);
-};
-
-$("deleteChat").onclick=()=>{
-deleteChat(id);
-};
+  scrollBottom();
 }
 
-async function newChat(){
-if(S.sending)return;
+function addBubble(role,text,scroll=true){
+  const el=document.createElement('div');
 
-try{
+  el.className='msg '+role;
 
-const d=await api(
-"/api/chat/new",
-{
-method:"POST",
-body:"{}"
-}
-);
+  el.innerHTML=
+    `<div class="bubble">${esc(text)}</div>
+     <div class="meta">${role==='user'?'Вы':'Bulba AI'}</div>
+     ${role==='assistant'
+       ?'<button class="secondary" data-save-answer>⭐ Сохранить</button>'
+       :''}`;
 
-applyState(d.state);
-closeSheet();
+  chat.appendChild(el);
 
-haptic("medium");
+  if(role==='assistant'){
+    el.querySelector('[data-save-answer]').onclick=async()=>{
+      const d=await action('/api/favorite',{answer:text});
+      if(d?.ok)toast('Сохранено в избранное');
+    };
+  }
 
-input.focus();
-
-}catch(e){
-toast(e.message);
-}
-}
-
-async function clearChatHistory(
-id=S.activeChat
-){
-if(!confirm(
-"Очистить историю этого чата?"
-)){
-return;
+  if(scroll)scrollBottom();
 }
 
-try{
-
-const d=await api(
-"/api/chat/clear",
-{
-method:"POST",
-body:JSON.stringify({
-chat_id:id
-})
-}
-);
-
-applyState(d.state);
-closeSheet();
-
-haptic("light");
-
-}catch(e){
-toast(e.message);
-}
+function scrollBottom(){
+  requestAnimationFrame(()=>{
+    window.scrollTo({
+      top:document.body.scrollHeight,
+      behavior:'smooth'
+    });
+  });
 }
 
-async function deleteChat(id){
-if(!confirm(
-"Удалить этот чат?"
-)){
-return;
+function resize(){
+  input.style.height='auto';
+  input.style.height=Math.min(input.scrollHeight,130)+'px';
+  updateSend();
 }
 
-try{
-
-const d=await api(
-"/api/chat/delete",
-{
-method:"POST",
-body:JSON.stringify({
-chat_id:id
-})
-}
-);
-
-applyState(d.state);
-closeSheet();
-
-haptic("medium");
-
-}catch(e){
-toast(e.message);
-}
+function updateSend(){
+  send.disabled=S.sending||(!input.value.trim()&&!S.file);
 }
 
-async function renameChat(id){
-const c=S.chats.find(
-x=>String(x.id)===String(id)
-);
-
-const current=c?.title||"";
-
-openSheet(
-"Переименовать чат",
-`
-<input
-class="textInput"
-id="renameInput"
-maxlength="60"
-value="${escapeHtml(current)}"
-placeholder="Название чата"
->
-
-<button class="rowBtn" id="saveRename">
-<span class="itemTitle">Сохранить</span>
-<span>✓</span>
-</button>
-`
-);
-
-const ri=$("renameInput");
-
-ri.focus();
-ri.select();
-
-$("saveRename").onclick=async()=>{
-
-const title=ri.value.trim();
-
-if(!title){
-toast(
-"Название не может быть пустым."
-);
-return;
-}
-
-try{
-
-const d=await api(
-"/api/chat/rename",
-{
-method:"POST",
-body:JSON.stringify({
-chat_id:id,
-title
-})
-}
-);
-
-applyState(d.state);
-closeSheet();
-
-haptic("light");
-
-}catch(e){
-toast(e.message);
-}
-};
-}
-
-function styleSheet(){
-
-const values=[
-[
-"normal",
-"🧠 Обычно",
-"Нормальный баланс"
-],
-[
-"short",
-"⚡ Кратко",
-"Минимум лишнего"
-],
-[
-"detailed",
-"📚 Подробно",
-"Больше объяснений"
-]
-];
-
-let html=`
-<div class="sheetSub">
-Стиль применяется к новым ответам.
-</div>
-`;
-
-for(const [
-id,
-name,
-description
-] of values){
-
-html+=`
-<button
-class="styleOption ${S.style===id?"selected":""}"
-data-style="${id}"
->
-<div class="itemLeft">
-<div class="itemTitle">${name}</div>
-<div class="itemMeta">${description}</div>
-</div>
-
-<span class="check">
-${S.style===id?"✓":""}
-</span>
-</button>
-`;
-}
-
-openSheet(
-"⚙️ Стиль ответа",
-html
-);
-
-sheetContent
-.querySelectorAll("[data-style]")
-.forEach(button=>{
-
-button.onclick=async()=>{
-
-try{
-
-const d=await api(
-"/api/settings",
-{
-method:"POST",
-body:JSON.stringify({
-style:button.dataset.style
-})
-}
-);
-
-applyState(d.state);
-closeSheet();
-
-haptic("light");
-
-}catch(e){
-toast(e.message);
-}
-
-};
-
-});
-}
-
-function memorySheet(){
-
-let html=`
-<div class="sheetSub">
-Память используется моделью,
-когда информация относится к запросу.
-</div>
-`;
-
-const entries=Object.entries(
-S.memory||{}
-);
-
-if(entries.length){
-
-for(const [
-key,
-value
-] of entries){
-
-html+=`
-<div class="memoryItem">
-<div class="memoryKey">
-${escapeHtml(key)}
-</div>
-
-<div class="memoryValue">
-${escapeHtml(value)}
-</div>
-</div>
-`;
-}
-
-}else{
-
-html+=`
-<div class="sheetSub">
-Память пуста.
-</div>
-`;
-}
-
-html+=`
-<input
-class="textInput"
-id="memKey"
-placeholder="Например: Цель"
-maxlength="80"
->
-
-<input
-class="textInput"
-id="memValue"
-placeholder="Значение"
-maxlength="500"
->
-
-<button
-class="rowBtn"
-id="saveMemory"
->
-<span class="itemTitle">
-＋ Добавить в память
-</span>
-<span>✓</span>
-</button>
-`;
-
-if(entries.length){
-
-html+=`
-<button
-class="rowBtn danger"
-id="clearMemory"
->
-<span>🗑 Очистить память</span>
-<span>›</span>
-</button>
-`;
-}
-
-openSheet(
-"💾 Память",
-html
-);
-
-$("saveMemory").onclick=async()=>{
-
-const key=$("memKey").value.trim();
-const value=$("memValue").value.trim();
-
-if(!key||!value){
-toast(
-"Заполни название и значение."
-);
-return;
-}
-
-try{
-
-const d=await api(
-"/api/memory",
-{
-method:"POST",
-body:JSON.stringify({
-action:"set",
-key,
-value
-})
-}
-);
-
-applyState(d.state);
-
-memorySheet();
-
-haptic("light");
-
-}catch(e){
-toast(e.message);
-}
-};
-
-const clear=$("clearMemory");
-
-if(clear){
-
-clear.onclick=async()=>{
-
-if(!confirm(
-"Очистить всю память?"
-)){
-return;
-}
-
-try{
-
-const d=await api(
-"/api/memory",
-{
-method:"POST",
-body:JSON.stringify({
-action:"clear"
-})
-}
-);
-
-applyState(d.state);
-
-memorySheet();
-
-haptic("medium");
-
-}catch(e){
-toast(e.message);
-}
-};
-
-}
-}
-
-async function statsSheet(){
-
-try{
-
-const d=await api(
-"/api/stats",
-{
-method:"POST",
-body:"{}"
-}
-);
-
-const s=d.stats||{};
-
-openSheet(
-"📊 Статистика",
-`
-<div class="memoryItem">
-<div class="memoryKey">
-Твои запросы
-</div>
-<div class="memoryValue">
-${Number(s.requests||0)}
-</div>
-</div>
-
-<div class="memoryItem">
-<div class="memoryKey">
-Ошибки
-</div>
-<div class="memoryValue">
-${Number(s.errors||0)}
-</div>
-</div>
-
-<div class="memoryItem">
-<div class="memoryKey">
-Чатов
-</div>
-<div class="memoryValue">
-${Number(s.chats||0)}
-</div>
-</div>
-
-<div class="memoryItem">
-<div class="memoryKey">
-Всего запросов
-</div>
-<div class="memoryValue">
-${Number(s.total_requests||0)}
-</div>
-</div>
-
-<div class="memoryItem">
-<div class="memoryKey">
-Версия
-</div>
-<div class="memoryValue">
-${escapeHtml(s.version||"")}
-</div>
-</div>
-`
-);
-
-}catch(e){
-toast(e.message);
-}
-}
-
-function settingsSheet(){
-
-openSheet(
-"⚙️ Настройки",
-`
-<button class="rowBtn" id="styleBtn">
-<span class="itemTitle">
-Стиль ответа
-</span>
-<span>›</span>
-</button>
-
-<button class="rowBtn" id="memoryBtn">
-<span class="itemTitle">
-💾 Память
-</span>
-<span>›</span>
-</button>
-
-<button class="rowBtn" id="statsBtn">
-<span class="itemTitle">
-📊 Статистика
-</span>
-<span>›</span>
-</button>
-`
-);
-
-$("styleBtn").onclick=styleSheet;
-$("memoryBtn").onclick=memorySheet;
-$("statsBtn").onclick=statsSheet;
-}
-
-async function resizeImage(fileObject){
-
-if(
-!("createImageBitmap" in window)
-){
-return fallbackImage(
-fileObject
-);
-}
-
-const bitmap=
-await createImageBitmap(
-fileObject
-);
-
-const max=1600;
-
-let width=bitmap.width;
-let height=bitmap.height;
-
-if(
-width>max||
-height>max
-){
-
-const scale=Math.min(
-max/width,
-max/height
-);
-
-width=Math.round(
-width*scale
-);
-
-height=Math.round(
-height*scale
-);
-}
-
-const canvas=
-document.createElement(
-"canvas"
-);
-
-canvas.width=width;
-canvas.height=height;
-
-const ctx=canvas.getContext(
-"2d"
-);
-
-ctx.drawImage(
-bitmap,
-0,
-0,
-width,
-height
-);
-
-if(bitmap.close){
-bitmap.close();
-}
-
-return canvas.toDataURL(
-"image/jpeg",
-0.82
-);
-}
-
-function fallbackImage(
-fileObject
-){
-
-return new Promise(
-(resolve,reject)=>{
-
-const reader=
-new FileReader();
-
-reader.onload=()=>{
-
-const image=
-new Image();
-
-image.onload=()=>{
-
-const max=1600;
-
-const scale=Math.min(
-1,
-max/image.width,
-max/image.height
-);
-
-const canvas=
-document.createElement(
-"canvas"
-);
-
-canvas.width=
-Math.round(
-image.width*scale
-);
-
-canvas.height=
-Math.round(
-image.height*scale
-);
-
-const ctx=
-canvas.getContext("2d");
-
-ctx.drawImage(
-image,
-0,
-0,
-canvas.width,
-canvas.height
-);
-
-resolve(
-canvas.toDataURL(
-"image/jpeg",
-0.82
-)
-);
-};
-
-image.onerror=reject;
-
-image.src=reader.result;
-};
-
-reader.onerror=reject;
-
-reader.readAsDataURL(
-fileObject
-);
-
-});
-}
-
-async function chooseImage(
-fileObject
-){
-
-if(!fileObject){
-return;
-}
-
-if(
-!fileObject.type.startsWith(
-"image/"
-)
-){
-
-toast(
-"Выбери изображение."
-);
-
-return;
-}
-
-if(
-fileObject.size>
-8*1024*1024
-){
-
-toast(
-"Фото слишком большое. Максимум 8 МБ."
-);
-
-return;
-}
-
-try{
-
-S.image=
-await resizeImage(
-fileObject
-);
-
-previewImage.src=S.image;
-
-preview.classList.add(
-"show"
-);
-
-updateSend();
-
-haptic("light");
-
-}catch(error){
-
-console.error(error);
-
-toast(
-"Не удалось обработать фото."
-);
-}
-}
-
-function removeImage(){
-
-S.image=null;
-
-previewImage.src="";
-
-preview.classList.remove(
-"show"
-);
-
-file.value="";
-
-updateSend();
+async function load(){
+  if(!S.init){
+    toast('Открой Mini App через Telegram.');
+    return;
+  }
+
+  try{
+    const [a,b]=await Promise.all([
+      api('/api/state'),
+      api('/api/models')
+    ]);
+
+    S.models=b.models||[];
+    applyState(a.state);
+  }catch(e){
+    $('status').textContent='Ошибка подключения';
+    toast(e.message);
+  }
 }
 
 async function sendMessage(){
+  if(S.sending)return;
 
-if(S.sending){
-return;
+  const text=input.value.trim();
+
+  if(!text&&!S.file)return;
+
+  S.sending=true;
+  updateSend();
+
+  const f=S.file;
+
+  input.value='';
+  resize();
+  clearFile();
+
+  addBubble('user',text||`[${f?.name||'файл'}]`);
+  $('typing').classList.add('show');
+
+  try{
+    const body={
+      message:text,
+      model:S.state?.model||'auto',
+      chat_id:S.state?.active_chat
+    };
+
+    if(f){
+      if(f.kind==='image'){
+        body.image=f.data;
+      }else{
+        body.file={
+          name:f.name,
+          data:f.data
+        };
+      }
+    }
+
+    const d=await api('/api/chat',{
+      method:'POST',
+      body:JSON.stringify(body),
+      timeout:110000
+    });
+
+    $('typing').classList.remove('show');
+
+    addBubble('assistant',d.answer||'');
+    applyState(d.state);
+
+    if(d.file)downloadFile(d.file);
+
+    haptic('light');
+  }catch(e){
+    $('typing').classList.remove('show');
+
+    addBubble(
+      'assistant',
+      '❌ '+(
+        e.name==='AbortError'
+          ?'Сервер слишком долго не отвечает.'
+          :e.message
+      )
+    );
+
+    haptic('heavy');
+  }finally{
+    S.sending=false;
+    updateSend();
+    input.focus();
+  }
 }
 
-const text=
-input.value.trim();
-
-if(
-!text&&!S.image
-){
-return;
+function downloadFile(f){
+  try{
+    const a=document.createElement('a');
+    a.href=`data:${f.mime};base64,${f.data}`;
+    a.download=f.name;
+    a.click();
+    toast(`Файл ${f.name} готов`);
+  }catch{
+    toast('Файл создан, но скачать его не удалось');
+  }
 }
 
-S.sending=true;
-
-updateSend();
-
-const image=S.image;
-
-input.value="";
-
-resize();
-
-removeImage();
-
-renderMessage(
-"user",
-text||"",
-image
-);
-
-typing(true);
-
-try{
-
-const data=
-await api(
-"/api/chat",
-{
-method:"POST",
-body:JSON.stringify({
-message:text,
-model:S.model,
-chat_id:S.activeChat,
-image
-}),
-timeout:100000
-}
-);
-
-typing(false);
-
-renderMessage(
-"assistant",
-data.answer||""
-);
-
-applyState(
-data.state
-);
-
-haptic("light");
-
-}catch(error){
-
-typing(false);
-
-let message=
-error?.message||
-"Неизвестная ошибка.";
-
-if(
-error?.name==="AbortError"
-){
-message=
-"Сервер слишком долго не отвечает.";
+function clearFile(){
+  S.file=null;
+  $('filePreview').classList.remove('show');
+  $('fileName').textContent='';
+  file.value='';
+  updateSend();
 }
 
-renderMessage(
-"assistant",
-"❌ Ошибка: "+message
-);
-
-haptic("heavy");
-
-}finally{
-
-S.sending=false;
-
-updateSend();
-
-input.focus();
-}
+function imageData(f){
+  return new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>resolve(r.result);
+    r.onerror=reject;
+    r.readAsDataURL(f);
+  });
 }
 
-async function boot(){
+async function chooseFile(f){
+  if(!f)return;
 
-if(!initData()){
+  if(f.size===0){
+    toast('Файл пустой');
+    return;
+  }
 
-$("statusText").textContent=
-"Открой через Telegram";
+  if(f.size>10*1024*1024){
+    toast('Файл больше 10 МБ');
+    return;
+  }
 
-toast(
-"Открой Bulba AI через Telegram."
-);
+  try{
+    const data=await imageData(f);
 
-return;
+    S.file={
+      name:f.name,
+      data,
+      kind:f.type.startsWith('image/')?'image':'file'
+    };
+
+    $('fileName').textContent=f.name;
+    $('filePreview').classList.add('show');
+
+    updateSend();
+    haptic('light');
+  }catch{
+    toast('Не удалось прочитать файл');
+  }
 }
 
-try{
+function chatsSheet(){
+  const rows=(S.state?.chats||[]).map(c=>
+    `<button class="row" data-chat="${esc(c.id)}">
+      <div class="grow">
+        <b>${c.pinned?'📌 ':''}${esc(c.title)}</b>
+        <small>${c.requests} запросов</small>
+      </div>
+      <span class="arrow">
+        ${String(c.id)===String(S.state?.active_chat)?'✓':'›'}
+      </span>
+    </button>`
+  ).join('');
 
-const [
-stateResponse,
-modelsResponse
-]=await Promise.all([
-api("/api/state"),
-api("/api/models")
-]);
+  openSheet(
+    'Чаты',
+    `${rows||'<div class="empty">Чатов пока нет</div>'}
+     <button class="primary" id="newChatSheet">＋ Новый чат</button>`
+  );
 
-S.models=
-Array.isArray(
-modelsResponse.models
-)
-?modelsResponse.models
-:[];
+  document.querySelectorAll('[data-chat]').forEach(b=>{
+    b.onclick=async()=>{
+      await action('/api/chat/select',{
+        chat_id:b.dataset.chat
+      });
+      closeSheet();
+    };
+  });
 
-applyState(
-stateResponse.state
-);
-
-S.booted=true;
-
-$("statusText").textContent=
-"Online";
-
-}catch(error){
-
-console.error(error);
-
-$("statusText").textContent=
-"Ошибка";
-
-toast(
-error.message||
-"Не удалось подключиться."
-);
-}
+  $('newChatSheet').onclick=async()=>{
+    await action('/api/chat/new');
+    closeSheet();
+  };
 }
 
-$("attach").onclick=()=>{
-file.click();
-};
+async function action(path,body){
+  try{
+    const d=await api(path,{
+      method:'POST',
+      body:JSON.stringify(body||{})
+    });
 
-file.onchange=()=>{
-chooseImage(
-file.files?.[0]
-);
-};
+    if(d.state)applyState(d.state);
 
-$("removePhoto").onclick=
-removeImage;
-
-$("modelButton").onclick=
-modelSheet;
-
-$("newChat").onclick=
-newChat;
-
-send.onclick=
-sendMessage;
-
-input.addEventListener(
-"input",
-()=>{
-resize();
-updateSend();
+    haptic('light');
+    return d;
+  }catch(e){
+    toast(e.message);
+  }
 }
-);
 
-input.addEventListener(
-"keydown",
-event=>{
+function memorySheet(){
+  const mem=S.state?.memory||{};
 
-if(
-event.key==="Enter"&&
-!event.shiftKey
-){
+  const rows=Object.entries(mem).map(([k,v])=>
+    `<div class="row">
+      <div class="grow">
+        <b>${esc(k)}</b>
+        <small>${esc(v)}</small>
+      </div>
+      <button class="close danger" data-delmem="${esc(k)}">×</button>
+    </div>`
+  ).join('');
 
-event.preventDefault();
+  openSheet(
+    'Память',
+    `${rows||'<div class="empty">Память пуста</div>'}
+     <div class="sectionTitle">Добавить</div>
+     <input class="field" id="memKey" placeholder="Название">
+     <input class="field" id="memVal" placeholder="Значение">
+     <button class="primary" id="memAdd">Сохранить</button>
+     <button class="secondary" id="memClear">Очистить память</button>`
+  );
 
-sendMessage();
+  document.querySelectorAll('[data-delmem]').forEach(b=>{
+    b.onclick=async()=>{
+      await action('/api/memory',{
+        action:'delete',
+        key:b.dataset.delmem
+      });
+      memorySheet();
+    };
+  });
+
+  $('memAdd').onclick=async()=>{
+    await action('/api/memory',{
+      action:'set',
+      key:$('memKey').value,
+      value:$('memVal').value
+    });
+    memorySheet();
+  };
+
+  $('memClear').onclick=async()=>{
+    await action('/api/memory',{
+      action:'clear'
+    });
+    memorySheet();
+  };
 }
+
+function settingsSheet(){
+  const models=(S.models||[]).map(m=>{
+    const id=typeof m==='string'?m:m.id;
+
+    return `<option value="${esc(id)}"
+      ${S.state?.model===id?'selected':''}>
+      ${esc(id)}
+    </option>`;
+  }).join('');
+
+  openSheet(
+    'Настройки',
+    `<div class="sectionTitle">Модель</div>
+     <select class="field" id="modelSelect">
+       <option value="auto">🤖 Auto</option>
+       ${models}
+     </select>
+
+     <div class="sectionTitle">Стиль ответа</div>
+     <select class="field" id="styleSelect">
+       <option value="normal">Обычно</option>
+       <option value="short">Кратко</option>
+       <option value="detailed">Подробно</option>
+     </select>
+
+     <button class="primary" id="saveSettings">Сохранить</button>
+
+     <div class="sectionTitle">Доступ</div>
+     <div class="card">
+       ${esc(S.state?.license?.status||S.state?.license?.reason||'')}
+     </div>`
+  );
+
+  $('styleSelect').value=S.state?.style||'normal';
+
+  $('saveSettings').onclick=async()=>{
+    await action('/api/settings',{
+      model:$('modelSelect').value,
+      style:$('styleSelect').value
+    });
+
+    closeSheet();
+  };
 }
-);
 
-overlay.onclick=event=>{
+async function profileSheet(){
+  let html=
+    `<div class="card">
+      ${esc(
+        S.state?.license?.status||
+        S.state?.license?.reason||
+        'Доступ открыт'
+      )}
+    </div>`;
 
-if(
-event.target===overlay
-){
-closeSheet();
+  if(
+    S.state?.license?.required&&
+    !S.state?.license?.active
+  ){
+    html+=
+      `<div class="sectionTitle">Активация</div>
+       <input class="field" id="licenseCode" placeholder="BULBA-XXXX-XXXX">
+       <button class="primary" id="activate">Активировать</button>`;
+  }
+
+  html+=
+    `<div class="sectionTitle">Статистика</div>
+     <div class="card">
+       Запросов: ${S.state?.requests||0}<br>
+       Ошибок: ${S.state?.errors||0}<br>
+       Чатов: ${(S.state?.chats||[]).length}
+     </div>`;
+
+  if(S.state?.is_admin){
+    html+=`<button class="secondary" id="admin">👑 Админ-панель</button>`;
+  }
+
+  openSheet('Профиль',html);
+
+  if($('activate')){
+    $('activate').onclick=async()=>{
+      const d=await action('/api/activate',{
+        code:$('licenseCode').value
+      });
+
+      if(d?.ok){
+        toast('Лицензия активирована');
+        profileSheet();
+      }
+    };
+  }
+
+  if($('admin'))$('admin').onclick=adminSheet;
 }
-};
 
-document
-.querySelectorAll(
-".suggestion"
-)
-.forEach(button=>{
+function favoritesSheet(){
+  const fav=S.state?.favorites||[];
 
-button.onclick=()=>{
+  const rows=fav.map(x=>
+    `<div class="card">
+      <div>${esc(x.text)}</div>
+      <button class="secondary danger" data-delfav="${x.id}">
+        Удалить
+      </button>
+    </div>`
+  ).join('');
 
-input.value=
-button.dataset.suggestion||"";
+  openSheet(
+    'Избранное',
+    rows||'<div class="empty">Сохранённых ответов нет</div>'
+  );
 
-resize();
+  document.querySelectorAll('[data-delfav]').forEach(b=>{
+    b.onclick=async()=>{
+      await action('/api/favorite/delete',{
+        id:b.dataset.delfav
+      });
 
-updateSend();
+      favoritesSheet();
+    };
+  });
+}
 
-input.focus();
+function statsSheet(){
+  openSheet(
+    'Статистика',
+    `<div class="card">
+      <b>BulbaMaxAI ${esc(S.state?.version)}</b><br>
+      Ваши запросы: ${S.state?.requests||0}<br>
+      Ваши ошибки: ${S.state?.errors||0}<br>
+      Всего запросов: ${S.state?.stats?.total_requests||0}<br>
+      Всего ошибок: ${S.state?.stats?.total_errors||0}
+    </div>`
+  );
+}
 
-haptic("light");
-};
+async function adminSheet(){
+  try{
+    const [r,s]=await Promise.all([
+      api('/api/admin/rules'),
+      api('/api/admin/stats')
+    ]);
+
+    const rules=r.rules||[];
+
+    openSheet(
+      'Админ-панель',
+      `<div class="card">
+        Пользователей: ${s.stats.users}<br>
+        Запросов: ${s.stats.requests}<br>
+        Ошибок: ${s.stats.errors}<br>
+        Правил: ${s.stats.rules}
+      </div>
+
+      <div class="sectionTitle">Глобальное правило</div>
+
+      <input class="field" id="rulePattern" placeholder="Фраза">
+
+      <textarea class="field" id="ruleResponse" placeholder="Ответ"></textarea>
+
+      <select class="field" id="ruleMode">
+        <option value="contains">Содержит</option>
+        <option value="exact">Точное совпадение</option>
+      </select>
+
+      <button class="primary" id="ruleAdd">
+        Добавить правило
+      </button>
+
+      <div class="sectionTitle">Правила</div>
+
+      ${
+        rules.map(x=>
+          `<div class="row">
+            <div class="grow">
+              <b>${esc(x.pattern)}</b>
+              <small>${esc(x.response)}</small>
+            </div>
+            <button class="close danger" data-rule="${x.id}">×</button>
+          </div>`
+        ).join('')
+        ||
+        '<div class="empty">Правил нет</div>'
+      }
+
+      <div class="sectionTitle">Выдать лицензию</div>
+
+      <input class="field" id="licUser" placeholder="USER_ID">
+
+      <input class="field" id="licDays" type="number" placeholder="Дни">
+
+      <input class="field" id="licReq" type="number"
+        placeholder="Запросы, 0 = без лимита">
+
+      <button class="secondary" id="licAdd">
+        Создать и выдать
+      </button>`
+    );
+
+    $('ruleAdd').onclick=async()=>{
+      await action('/api/admin/rules',{
+        action:'add',
+        pattern:$('rulePattern').value,
+        response:$('ruleResponse').value,
+        mode:$('ruleMode').value
+      });
+
+      adminSheet();
+    };
+
+    document.querySelectorAll('[data-rule]').forEach(b=>{
+      b.onclick=async()=>{
+        await action('/api/admin/rules',{
+          action:'delete',
+          id:b.dataset.rule
+        });
+
+        adminSheet();
+      };
+    });
+
+    $('licAdd').onclick=async()=>{
+      const d=await action('/api/admin/license',{
+        user_id:$('licUser').value,
+        days:+$('licDays').value,
+        requests:+$('licReq').value||0
+      });
+
+      if(d?.code)toast(d.code);
+    };
+
+  }catch(e){
+    toast(e.message);
+  }
+}
+
+function brandMenu(){
+  openSheet(
+    'Bulba AI',
+    `<button class="row" id="mChats">
+      <div class="grow">
+        <b>💬 Чаты</b>
+        <small>История и управление</small>
+      </div>
+      <span class="arrow">›</span>
+    </button>
+
+    <button class="row" id="mMemory">
+      <div class="grow">
+        <b>💾 Память</b>
+        <small>Сохранённые данные</small>
+      </div>
+      <span class="arrow">›</span>
+    </button>
+
+    <button class="row" id="mStats">
+      <div class="grow">
+        <b>📊 Статистика</b>
+        <small>Ваши показатели</small>
+      </div>
+      <span class="arrow">›</span>
+    </button>
+
+    <button class="row" id="mFavorites">
+      <div class="grow">
+        <b>⭐ Избранное</b>
+        <small>Сохранённые ответы</small>
+      </div>
+      <span class="arrow">›</span>
+    </button>
+
+    <button class="row" id="mSettings">
+      <div class="grow">
+        <b>⚙️ Настройки</b>
+        <small>Модель и стиль</small>
+      </div>
+      <span class="arrow">›</span>
+    </button>`
+  );
+
+  $('mChats').onclick=chatsSheet;
+  $('mMemory').onclick=memorySheet;
+  $('mStats').onclick=statsSheet;
+  $('mFavorites').onclick=favoritesSheet;
+  $('mSettings').onclick=settingsSheet;
+}
+
+function tab(name){
+  if(name==='chatTab'){
+    closeSheet();
+  }else if(name==='chatsTab'){
+    chatsSheet();
+  }else if(name==='memoryTab'){
+    memorySheet();
+  }else{
+    settingsSheet();
+  }
+
+  document.querySelectorAll('.nav button').forEach(b=>{
+    b.classList.toggle(
+      'active',
+      b.dataset.tab===name
+    );
+  });
+}
+
+document.querySelectorAll('.nav button').forEach(b=>{
+  b.onclick=()=>tab(b.dataset.tab);
 });
 
-document
-.querySelector(".brand")
-.onclick=()=>{
+document.querySelectorAll('.chip').forEach(b=>{
+  b.onclick=()=>{
+    input.value=b.dataset.q+' ';
+    resize();
+    input.focus();
+  };
+});
 
-openSheet(
-"Bulba AI",
-`
-<button class="rowBtn" id="allChats">
-<span>💬 Чаты</span>
-<span>›</span>
-</button>
+$('brand').onclick=brandMenu;
+$('profileBtn').onclick=profileSheet;
 
-<button class="rowBtn" id="newFromMenu">
-<span>＋ Новый чат</span>
-<span>›</span>
-</button>
+$('attach').onclick=()=>file.click();
 
-<button class="rowBtn" id="styleFromMenu">
-<span>⚙️ Настройки</span>
-<span>›</span>
-</button>
+file.onchange=()=>chooseFile(file.files?.[0]);
 
-<button class="rowBtn" id="memoryFromMenu">
-<span>💾 Память</span>
-<span>›</span>
-</button>
+$('removeFile').onclick=clearFile;
 
-<button class="rowBtn" id="statsFromMenu">
-<span>📊 Статистика</span>
-<span>›</span>
-</button>
-`
-);
+send.onclick=sendMessage;
 
-setTimeout(()=>{
+input.addEventListener('input',resize);
 
-$("allChats").onclick=
-chatsSheet;
+input.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){
+    e.preventDefault();
+    sendMessage();
+  }
+});
 
-$("newFromMenu").onclick=
-newChat;
-
-$("styleFromMenu").onclick=
-settingsSheet;
-
-$("memoryFromMenu").onclick=
-memorySheet;
-
-$("statsFromMenu").onclick=
-statsSheet;
-
-},0);
-};
-
-if(tg){
-
-try{
-tg.ready();
-tg.expand();
-
-if(tg.disableVerticalSwipes){
-tg.disableVerticalSwipes();
-}
-
-}catch(e){}
-}
-
-boot();
+load();
+resize();
 
 })();
 </script>
