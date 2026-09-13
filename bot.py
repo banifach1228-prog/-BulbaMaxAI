@@ -8,10 +8,9 @@ import io
 import csv
 import re
 import threading
+import secrets
+from difflib import SequenceMatcher
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-
-import requests
 
 from licenses import (
     activate_license,
@@ -25,144 +24,125 @@ from licenses import (
     user_has_access,
 )
 
-BOT_VERSION = "V16"
+import requests
 
+BOT_VERSION = "V16"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_KEY = os.getenv("API_KEY", "").strip()
 
 BASE_URL = "https://api.baza-ai.org/v1"
 TG_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-# Оставляем старое имя, чтобы не потерять существующую базу.
-DATA_FILE = "v15_memory.json"
-LEGACY_DATA_FILE = "v14_memory.json"
+DATA_FILE = "v16_memory.json"
+LEGACY_DATA_FILES = ("v15_memory.json", "v14_memory.json")
 
 MAX_HISTORY = 24
 MAX_CHATS = 30
 MAX_REPLY = 3900
-
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_FILE_TEXT = 40000
-
 POLL_TIMEOUT = 25
-
-# Было 90 секунд.
-# 40 секунд достаточно для обычного запроса и сильно уменьшает зависания.
-API_TIMEOUT = 40
-MODELS_TIMEOUT = 12
-
+API_TIMEOUT = 90
 RATE_LIMIT_COUNT = 6
 RATE_LIMIT_WINDOW = 10
 
+STYLE_PROMPTS = {
+    "normal": "Отвечай понятно, точно и по делу. Если есть неопределённость, прямо обозначай её.",
+    "short": "Отвечай кратко и по существу. Не добавляй лишнюю воду.",
+    "detailed": "Отвечай подробно и структурированно. Объясняй важные шаги и причины, но не растягивай ответ без необходимости.",
+}
+
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-
 if not API_KEY:
     raise RuntimeError("API_KEY is not set")
 
-
-# ============================================================
-# SESSIONS
-# ============================================================
-
 tg_session = requests.Session()
-
 api_session = requests.Session()
 api_session.headers.update({
     "Authorization": f"Bearer {API_KEY}",
     "Content-Type": "application/json",
 })
 
-
-# ============================================================
-# DATABASE
-# ============================================================
-
-db = {
-    "users": {},
-    "total_requests": 0,
-    "total_errors": 0,
-}
-
+db = {"users": {}, "total_requests": 0, "total_errors": 0, "rules": [], "version": BOT_VERSION}
 DB_LOCK = threading.RLock()
-LOAD_LOCK = threading.Lock()
+USER_LOCKS = {}
+USER_LOCKS_GUARD = threading.Lock()
 
-_db_loaded = False
+
+def get_user_lock(uid):
+    uid = str(uid)
+    with USER_LOCKS_GUARD:
+        lock = USER_LOCKS.get(uid)
+        if lock is None:
+            lock = threading.RLock()
+            USER_LOCKS[uid] = lock
+        return lock
 
 
 def load_db():
-    global db, _db_loaded
-
-    with LOAD_LOCK:
-        if _db_loaded:
-            return
-
-        source = DATA_FILE if Path(DATA_FILE).exists() else LEGACY_DATA_FILE
-
+    global db
+    with DB_LOCK:
+        source = DATA_FILE
+        if not Path(source).exists():
+            for legacy in LEGACY_DATA_FILES:
+                if Path(legacy).exists():
+                    source = legacy
+                    break
         try:
             with open(source, "r", encoding="utf-8") as f:
                 data = json.load(f)
-
             if isinstance(data, dict):
-                with DB_LOCK:
-                    db.clear()
-                    db.update(data)
-
-        except (OSError, json.JSONDecodeError) as e:
-            print("DB load error:", repr(e))
-
-        with DB_LOCK:
-            db.setdefault("users", {})
-            db.setdefault("total_requests", 0)
-            db.setdefault("total_errors", 0)
-
-        _db_loaded = True
+                db.update(data)
+        except (OSError, json.JSONDecodeError):
+            pass
+        db.setdefault("users", {})
+        db.setdefault("total_requests", 0)
+        db.setdefault("total_errors", 0)
+        db.setdefault("rules", [])
+        db.setdefault("version", BOT_VERSION)
+        db["version"] = BOT_VERSION
+        for u in db["users"].values():
+            if isinstance(u, dict):
+                u.pop("_user_id", None)
+                u.pop("_telegram_user", None)
 
 
 def save_db():
     with DB_LOCK:
         tmp = DATA_FILE + ".tmp"
-
         try:
+            clean = json.loads(json.dumps(db, ensure_ascii=False))
+            for u in clean.get("users", {}).values():
+                if isinstance(u, dict):
+                    u.pop("_user_id", None)
+                    u.pop("_telegram_user", None)
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(
-                    db,
-                    f,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-
+                json.dump(clean, f, ensure_ascii=False, indent=2)
             os.replace(tmp, DATA_FILE)
-
         except OSError as e:
             print("DB save error:", repr(e))
 
 
-# ============================================================
-# USER LOCKS
-# ============================================================
-
-_USER_LOCKS = {}
-_USER_LOCKS_LOCK = threading.Lock()
+def get_rule_response(text):
+    """Backward-compatible alias for the single global-rule engine."""
+    return match_global_rule(text)
 
 
-def get_user_lock(user_id):
-    uid = str(user_id)
-
-    with _USER_LOCKS_LOCK:
-        lock = _USER_LOCKS.get(uid)
-
-        if lock is None:
-            lock = threading.RLock()
-            _USER_LOCKS[uid] = lock
-
-        return lock
+def add_rule(kind, pattern, response, priority=0, threshold=0.86):
+    return add_global_rule(pattern, response, mode=kind, priority=priority, threshold=threshold)
 
 
-# ============================================================
-# USER / CHAT
-# ============================================================
+def remove_rule(rule_id):
+    return delete_global_rule(rule_id)
+
+
+def set_rule_enabled(rule_id, enabled):
+    try:
+        update_global_rule(rule_id, enabled=enabled)
+        return True
+    except KeyError:
+        return False
 
 def default_chat():
     return {
@@ -179,77 +159,61 @@ def default_user():
         "model": "auto",
         "style": "normal",
         "memory": {},
-        "chats": {
-            "main": default_chat()
-        },
+        "chats": {"main": default_chat()},
         "active_chat": "main",
         "requests": 0,
         "errors": 0,
         "rate": [],
+        "pinned_chats": [],
+        "favorites": [],
     }
 
 
 def get_user(uid):
     uid = str(uid)
-
-    with DB_LOCK:
-        if uid not in db["users"]:
-            db["users"][uid] = default_user()
-
-        u = db["users"][uid]
-
-        u.setdefault("model", "auto")
-        u.setdefault("style", "normal")
-        u.setdefault("memory", {})
-        u.setdefault("chats", {"main": default_chat()})
-        u.setdefault("active_chat", "main")
-        u.setdefault("requests", 0)
-        u.setdefault("errors", 0)
-        u.setdefault("rate", [])
-
-        if not u["chats"]:
-            u["chats"]["main"] = default_chat()
-            u["active_chat"] = "main"
-
-        for c in u["chats"].values():
-            c.setdefault("history", [])
-            c.setdefault("requests", 0)
-            c.setdefault("created", int(time.time()))
-            c.setdefault("last_prompt", None)
-            c.setdefault("last_request", None)
-
-        return u
+    if uid not in db["users"]:
+        db["users"][uid] = default_user()
+    u = db["users"][uid]
+    # Runtime identity is never persisted inside the user record.
+    u.pop("_user_id", None)
+    u.pop("_telegram_user", None)
+    u.setdefault("model", "auto")
+    u.setdefault("style", "normal")
+    u.setdefault("memory", {})
+    u.setdefault("chats", {"main": default_chat()})
+    u.setdefault("active_chat", "main")
+    u.setdefault("requests", 0)
+    u.setdefault("errors", 0)
+    u.setdefault("rate", [])
+    u.setdefault("pinned_chats", [])
+    u.setdefault("favorites", [])
+    if not u["chats"]:
+        u["chats"]["main"] = default_chat()
+        u["active_chat"] = "main"
+    for c in u["chats"].values():
+        c.setdefault("history", [])
+        c.setdefault("requests", 0)
+        c.setdefault("created", int(time.time()))
+        c.setdefault("last_prompt", None)
+        c.setdefault("last_request", None)
+    return u
 
 
 def get_chat(u):
     name = u.get("active_chat", "main")
-
     if name not in u["chats"]:
         u["chats"][name] = default_chat()
-
     return u["chats"][name]
 
 
 def allowed_request(u):
     now = time.time()
-
-    u["rate"] = [
-        x
-        for x in u.get("rate", [])
-        if now - x < RATE_LIMIT_WINDOW
-    ]
-
+    u["rate"] = [x for x in u.get("rate", []) if now - x < RATE_LIMIT_WINDOW]
     if len(u["rate"]) >= RATE_LIMIT_COUNT:
         return False
-
     u["rate"].append(now)
-
     return True
 
-
-# ============================================================
-# TELEGRAM
-# ============================================================
 
 def tg(method, data=None, timeout=40, files=None):
     try:
@@ -259,23 +223,14 @@ def tg(method, data=None, timeout=40, files=None):
             files=files,
             timeout=timeout,
         )
-
         if not r.ok:
-            print(
-                "Telegram HTTP:",
-                r.status_code,
-                r.text[:500],
-            )
+            print("Telegram HTTP:", r.status_code, r.text[:500])
             return None
-
         p = r.json()
-
         if not p.get("ok"):
             print("Telegram API:", p)
             return None
-
         return p.get("result")
-
     except Exception as e:
         print("Telegram error:", repr(e))
         return None
@@ -283,1072 +238,443 @@ def tg(method, data=None, timeout=40, files=None):
 
 def send_message(chat_id, text, keyboard=None):
     text = str(text or "...")
-
-    chunks = [
-        text[i:i + MAX_REPLY]
-        for i in range(0, len(text), MAX_REPLY)
-    ] or ["..."]
-
+    chunks = [text[i:i + MAX_REPLY] for i in range(0, len(text), MAX_REPLY)] or ["..."]
     first = None
-
     for i, chunk in enumerate(chunks):
-        data = {
-            "chat_id": chat_id,
-            "text": chunk,
-        }
-
+        data = {"chat_id": chat_id, "text": chunk}
         if keyboard and i == len(chunks) - 1:
-            data["reply_markup"] = json.dumps(
-                keyboard,
-                ensure_ascii=False,
-            )
-
+            data["reply_markup"] = json.dumps(keyboard, ensure_ascii=False)
         result = tg("sendMessage", data)
-
         if first is None:
             first = result
-
     return first
 
 
 def edit_message(chat_id, message_id, text, keyboard=None):
-    text = str(text or "...")
-
     if len(text) <= MAX_REPLY:
-        data = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text,
-        }
-
+        data = {"chat_id": chat_id, "message_id": message_id, "text": text}
         if keyboard:
-            data["reply_markup"] = json.dumps(
-                keyboard,
-                ensure_ascii=False,
-            )
-
+            data["reply_markup"] = json.dumps(keyboard, ensure_ascii=False)
         return tg("editMessageText", data)
-
     first = text[:MAX_REPLY]
     rest = text[MAX_REPLY:]
-
-    tg(
-        "editMessageText",
-        {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": first,
-        },
-    )
-
-    return send_message(
-        chat_id,
-        rest,
-        keyboard,
-    )
+    tg("editMessageText", {
+        "chat_id": chat_id, "message_id": message_id, "text": first
+    })
+    return send_message(chat_id, rest, keyboard)
 
 
 def answer_callback(callback_id, text=None):
-    data = {
-        "callback_query_id": callback_id
-    }
-
+    data = {"callback_query_id": callback_id}
     if text:
         data["text"] = text
-
     tg("answerCallbackQuery", data)
 
-
-# ============================================================
-# KEYBOARDS
-# ============================================================
 
 def main_keyboard():
     return {
         "keyboard": [
-            [
-                {"text": "🤖 Авто"},
-                {"text": "🧠 Модель"},
-            ],
-            [
-                {"text": "📊 Статистика"},
-                {"text": "💾 Память"},
-            ],
-            [
-                {"text": "💬 Чаты"},
-                {"text": "🆕 Новый чат"},
-            ],
-            [
-                {"text": "🧹 Очистить"},
-                {"text": "⚙️ Настройки"},
-            ],
+            [{"text": "🤖 Авто"}, {"text": "🧠 Модель"}],
+            [{"text": "📊 Статистика"}, {"text": "💾 Память"}],
+            [{"text": "💬 Чаты"}, {"text": "🆕 Новый чат"}],
+            [{"text": "🧹 Очистить"}, {"text": "⚙️ Настройки"}],
         ],
         "resize_keyboard": True,
     }
 
 
 def retry_keyboard():
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "🔄 Повторить",
-                    "callback_data": "retry",
-                }
-            ]
-        ]
-    }
+    return {"inline_keyboard": [[{"text": "🔄 Повторить", "callback_data": "retry"}]]}
 
 
 def settings_keyboard(style):
     def mark(v, label):
         return ("✅ " if style == v else "") + label
-
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": mark("normal", "🧠 Обычно"),
-                    "callback_data": "style:normal",
-                }
-            ],
-            [
-                {
-                    "text": mark("short", "⚡ Кратко"),
-                    "callback_data": "style:short",
-                }
-            ],
-            [
-                {
-                    "text": mark("detailed", "📚 Подробно"),
-                    "callback_data": "style:detailed",
-                }
-            ],
-            [
-                {
-                    "text": "⬅️ Назад",
-                    "callback_data": "back",
-                }
-            ],
-        ]
-    }
+    return {"inline_keyboard": [
+        [{"text": mark("normal", "🧠 Обычно"), "callback_data": "style:normal"}],
+        [{"text": mark("short", "⚡ Кратко"), "callback_data": "style:short"}],
+        [{"text": mark("detailed", "📚 Подробно"), "callback_data": "style:detailed"}],
+        [{"text": "⬅️ Назад", "callback_data": "back"}],
+    ]}
 
 
 def memory_keyboard():
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "🗑 Очистить память",
-                    "callback_data": "memory_clear",
-                }
-            ],
-            [
-                {
-                    "text": "⬅️ Назад",
-                    "callback_data": "back",
-                }
-            ],
-        ]
-    }
-
-
-# ============================================================
-# MODELS
-# ============================================================
-
-MODELS_LOCK = threading.RLock()
+    return {"inline_keyboard": [
+        [{"text": "🗑 Очистить память", "callback_data": "memory_clear"}],
+        [{"text": "⬅️ Назад", "callback_data": "back"}],
+    ]}
 
 
 def get_models(force=False):
     cache = get_models.cache
     now = time.time()
-
-    with MODELS_LOCK:
-        if (
-            not force
-            and cache["models"]
-            and now - cache["time"] < 60
-        ):
-            return cache["models"]
-
+    if not force and cache["models"] and now - cache["time"] < 60:
+        return cache["models"]
     try:
-        r = api_session.get(
-            f"{BASE_URL}/models",
-            timeout=MODELS_TIMEOUT,
-        )
-
+        r = api_session.get(f"{BASE_URL}/models", timeout=20)
         if not r.ok:
             return cache["models"]
-
         data = r.json()
-
-        models = [
-            x
-            for x in data.get("data", [])
-            if isinstance(x, dict)
-            and x.get("id")
-        ]
-
-        models.sort(
-            key=lambda x: x["id"].lower()
-        )
-
-        with MODELS_LOCK:
-            cache["models"] = models
-            cache["time"] = now
-
+        models = [x for x in data.get("data", []) if isinstance(x, dict) and x.get("id")]
+        models.sort(key=lambda x: x["id"].lower())
+        cache["models"], cache["time"] = models, now
         return models
-
     except Exception as e:
         print("Models error:", repr(e))
         return cache["models"]
 
 
-get_models.cache = {
-    "models": [],
-    "time": 0,
-}
+get_models.cache = {"models": [], "time": 0}
 
 
 def is_bad_model(mid):
     s = mid.lower()
-
-    return any(
-        x in s
-        for x in (
-            "embedding",
-            "moderation",
-            "tts",
-            "transcrib",
-            "realtime",
-            "image-generation",
-            "rerank",
-        )
-    )
+    return any(x in s for x in (
+        "embedding", "moderation", "tts", "transcrib", "realtime",
+        "image-generation", "rerank"
+    ))
 
 
 def rank_models(models, vision=False):
     def score(item):
         s = item["id"].lower()
-
         if is_bad_model(s):
-            return -100000
-
+            return -10000
         n = 0
-
-        # Vision-capable models first when image is present.
-        if vision and any(
-            x in s
-            for x in (
-                "vision",
-                "vl",
-                "omni",
-                "4o",
-                "multimodal",
-                "gemini",
-                "mistral",
-            )
-        ):
+        if vision and any(x in s for x in ("vision", "vl", "omni", "4o", "multimodal", "gemini", "mistral")):
             n += 100
-
-        # Prefer faster/smaller models in Auto.
-        if any(
-            x in s
-            for x in (
-                "mini",
-                "flash",
-                "haiku",
-                "small",
-                "lite",
-            )
-        ):
-            n += 35
-
-        if any(
-            x in s
-            for x in (
-                "gpt",
-                "claude",
-                "gemini",
-                "mistral",
-                "deepseek",
-                "qwen",
-                "kimi",
-                "minimax",
-                "glm",
-                "grok",
-            )
-        ):
+        if any(x in s for x in ("gpt", "claude", "gemini", "mistral", "deepseek", "qwen", "kimi", "minimax", "glm", "grok")):
             n += 20
-
-        # Huge/reasoning models are useful but should not
-        # automatically be first for every simple request.
-        if any(
-            x in s
-            for x in (
-                "reasoning",
-                "thinking",
-                "opus",
-                "o1",
-                "o3",
-            )
-        ):
-            n -= 5
-
         return n
-
-    return sorted(
-        models,
-        key=score,
-        reverse=True,
-    )
-
-
-def choose_model(u, vision=False, preferred=None):
-    models = [
-        m
-        for m in get_models()
-        if not is_bad_model(m["id"])
-    ]
-
-    available = {
-        m["id"]
-        for m in models
-    }
-
-    if preferred and preferred in available:
-        return [preferred]
-
-    if (
-        u.get("model") != "auto"
-        and u.get("model") in available
-    ):
-        return [u["model"]]
-
-    ranked = rank_models(
-        models,
-        vision=vision,
-    )
-
-    return [m["id"] for m in ranked]
+    return sorted(models, key=score, reverse=True)
 
 
 def model_keyboard(u):
-    rows = [
-        [
-            {
-                "text": "🤖 Авто",
-                "callback_data": "model:auto",
-            }
-        ]
-    ]
-
-    visible_models = [
-        m
-        for m in get_models()
-        if not is_bad_model(m["id"])
-    ]
-
+    rows = [[{"text": "🤖 Авто", "callback_data": "model:auto"}]]
+    visible_models = [m for m in get_models() if not is_bad_model(m["id"])]
     for i, m in enumerate(visible_models):
         mid = m["id"]
+        title = ("✅ " if u["model"] == mid else "") + mid
+        rows.append([{"text": title[:55], "callback_data": f"model:{i}"}])
+    rows.append([{"text": "⬅️ Назад", "callback_data": "back"}])
+    return {"inline_keyboard": rows}
 
-        title = (
-            ("✅ " if u["model"] == mid else "")
-            + mid
-        )
-
-        rows.append(
-            [
-                {
-                    "text": title[:55],
-                    "callback_data": f"model:{i}",
-                }
-            ]
-        )
-
-    rows.append(
-        [
-            {
-                "text": "⬅️ Назад",
-                "callback_data": "back",
-            }
-        ]
-    )
-
-    return {
-        "inline_keyboard": rows
-    }
-
-
-# ============================================================
-# AI
-# ============================================================
 
 def extract_error(r):
     try:
         d = r.json()
         e = d.get("error", d)
-
-        if isinstance(e, dict):
-            return str(e.get("message", e))
-
-        return str(e)
-
+        return str(e.get("message", e) if isinstance(e, dict) else e)
     except Exception:
         return r.text[:800]
 
 
 def call_ai(messages, model):
-    payload = {
-        "model": model,
-        "messages": messages,
-    }
-
-    # 2 попытки вместо 3.
-    # Второй запрос нужен только для временных ошибок.
-    for attempt in range(2):
-        try:
-            r = api_session.post(
-                f"{BASE_URL}/chat/completions",
-                json=payload,
-                timeout=API_TIMEOUT,
-            )
-
-            if r.status_code in (
-                429,
-                500,
-                502,
-                503,
-                504,
-            ):
-                if attempt == 0:
-                    time.sleep(1.5)
-
-                continue
-
-            if not r.ok:
-                return (
-                    None,
-                    extract_error(r),
-                    r.status_code,
-                )
-
-            d = r.json()
-
-            choices = d.get("choices") or []
-
-            if not choices:
-                return (
-                    None,
-                    "API не вернуло choices.",
-                    r.status_code,
-                )
-
-            content = (
-                choices[0]
-                .get("message", {})
-                .get("content", "")
-            )
-
-            if isinstance(content, list):
-                content = "\n".join(
-                    p.get("text", "")
-                    for p in content
-                    if isinstance(p, dict)
-                    and p.get("type") == "text"
-                )
-
-            content = str(content or "").strip()
-
-            if not content:
-                return (
-                    None,
-                    "Модель вернула пустой ответ.",
-                    r.status_code,
-                )
-
-            return (
-                content,
-                None,
-                r.status_code,
-            )
-
-        except requests.Timeout as e:
-            if attempt == 0:
-                time.sleep(1)
-                continue
-
-            return (
-                None,
-                "Превышено время ожидания ответа AI.",
-                0,
-            )
-
-        except requests.RequestException as e:
-            if attempt == 0:
-                time.sleep(1)
-                continue
-
-            return (
-                None,
-                str(e),
-                0,
-            )
-
-        except Exception as e:
-            return (
-                None,
-                repr(e),
-                0,
-            )
-
-    return (
-        None,
-        "Временная ошибка API.",
-        0,
-    )
+    """Exactly one provider call. Model fallback is handled by ai_chat, not here."""
+    payload = {"model": model, "messages": messages}
+    try:
+        r = api_session.post(f"{BASE_URL}/chat/completions", json=payload, timeout=API_TIMEOUT)
+        if not r.ok:
+            return None, extract_error(r), r.status_code
+        d = r.json()
+        choices = d.get("choices") or []
+        if not choices:
+            return None, "API не вернуло choices.", r.status_code
+        content = choices[0].get("message", {}).get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+        return str(content or "").strip(), None, r.status_code
+    except requests.RequestException as e:
+        return None, str(e), 0
+    except Exception as e:
+        return None, repr(e), 0
 
 
-def ai_chat(
-    u,
-    messages,
-    vision=False,
-    preferred_model=None,
-):
-    candidates = choose_model(
-        u,
-        vision=vision,
-        preferred=preferred_model,
-    )
-
-    if not candidates:
-        return None, "Нет доступных моделей."
-
-    last_error = "Не удалось получить ответ."
-
-    # Максимум 3 модели в Auto.
-    # Раньше могло быть до 8 моделей × 3 попытки.
-    for model in candidates[:3]:
-        content, err, status = call_ai(
-            messages,
-            model,
-        )
-
-        if content:
-            return content, None
-
-        last_error = err or last_error
-
-        if preferred_model:
-            break
-
-        if u.get("model") != "auto":
-            break
-
-        # Не тратим время на бессмысленные fallback.
-        if status not in (
-            400,
-            404,
-            429,
-            500,
-            502,
-            503,
-            504,
-            0,
-        ):
-            break
-
-    return None, last_error
+def choose_model(u, vision=False, preferred=None):
+    models = [m for m in get_models() if not is_bad_model(m["id"])]
+    available = {m["id"] for m in models}
+    if preferred and preferred in available:
+        primary = preferred
+    else:
+        ranked = rank_models(models, vision=vision)
+        primary = ranked[0]["id"] if ranked else None
+    if not primary:
+        return []
+    # Exactly one primary model; one fallback is allowed only after a real API failure.
+    ranked = [m["id"] for m in rank_models(models, vision=vision) if m["id"] != primary]
+    return [primary] + ranked[:1]
 
 
-# ============================================================
-# SAFE CALCULATOR
-# ============================================================
+# ---------------- SAFE CALCULATOR ----------------
 
 _BIN = {
-    ast.Add: op.add,
-    ast.Sub: op.sub,
-    ast.Mult: op.mul,
-    ast.Div: op.truediv,
-    ast.FloorDiv: op.floordiv,
-    ast.Mod: op.mod,
-    ast.Pow: op.pow,
+    ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul, ast.Div: op.truediv,
+    ast.FloorDiv: op.floordiv, ast.Mod: op.mod, ast.Pow: op.pow,
 }
+_UN = {ast.UAdd: op.pos, ast.USub: op.neg}
 
-_UN = {
-    ast.UAdd: op.pos,
-    ast.USub: op.neg,
-}
+
+def _normalize_rule_text(value):
+    return " ".join(str(value or "").casefold().split())[:500]
+
+def get_global_rules(enabled_only=True):
+    rules = db.get("rules", [])
+    return [r for r in rules if isinstance(r, dict) and (not enabled_only or r.get("enabled", True))]
+
+def match_global_rule(text):
+    normalized = _normalize_rule_text(text)
+    for rule in sorted(get_global_rules(), key=lambda r: int(r.get("priority", 0)), reverse=True):
+        pattern = _normalize_rule_text(rule.get("pattern"))
+        if not pattern:
+            continue
+        mode = rule.get("mode", "contains")
+        if mode == "exact":
+            matched = normalized == pattern
+        elif mode == "similar":
+            matched = SequenceMatcher(None, normalized, pattern).ratio() >= float(rule.get("threshold", 0.86))
+        else:
+            matched = pattern in normalized
+        if matched:
+            return str(rule.get("response") or "")[:4000]
+    return None
+
+def add_global_rule(pattern, response, mode="contains", priority=0, threshold=0.86):
+    if mode not in ("exact", "contains", "similar"):
+        raise ValueError("mode must be exact, contains or similar")
+    rule = {"id": int(time.time() * 1000), "pattern": str(pattern).strip()[:500], "response": str(response).strip()[:4000], "mode": mode, "priority": int(priority), "threshold": max(0.5, min(1.0, float(threshold))), "enabled": True, "created": int(time.time())}
+    if not rule["pattern"] or not rule["response"]:
+        raise ValueError("pattern and response are required")
+    db.setdefault("rules", []).append(rule)
+    save_db()
+    return rule
+
+def update_global_rule(rule_id, **changes):
+    for rule in db.get("rules", []):
+        if str(rule.get("id")) == str(rule_id):
+            for k in ("pattern", "response", "mode", "priority", "enabled", "threshold"):
+                if k in changes and changes[k] is not None:
+                    rule[k] = changes[k]
+            if rule.get("mode") not in ("exact", "contains", "similar"):
+                raise ValueError("Некорректный режим правила.")
+            rule["pattern"] = str(rule.get("pattern") or "").strip()[:500]
+            rule["response"] = str(rule.get("response") or "").strip()[:4000]
+            rule["threshold"] = max(0.5, min(1.0, float(rule.get("threshold", 0.86))))
+            save_db()
+            return rule
+    raise KeyError("Rule not found")
+
+def delete_global_rule(rule_id):
+    before = len(db.get("rules", []))
+    db["rules"] = [r for r in db.get("rules", []) if str(r.get("id")) != str(rule_id)]
+    if len(db["rules"]) == before:
+        return False
+    save_db()
+    return True
 
 
 def safe_eval(expr):
-    expr = (
-        expr
-        .replace(",", ".")
-        .replace("×", "*")
-        .replace("÷", "/")
-    )
-
-    tree = ast.parse(
-        expr,
-        mode="eval",
-    )
+    expr = expr.replace(",", ".").replace("×", "*").replace("÷", "/")
+    tree = ast.parse(expr, mode="eval")
 
     def ev(node):
         if isinstance(node, ast.Expression):
             return ev(node.body)
-
-        if isinstance(node, ast.Constant) and isinstance(
-            node.value,
-            (int, float),
-        ):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
             if abs(float(node.value)) > 1e100:
-                raise ValueError(
-                    "Слишком большое число."
-                )
-
+                raise ValueError("Слишком большое число.")
             return node.value
-
         if isinstance(node, ast.UnaryOp) and type(node.op) in _UN:
-            return _UN[type(node.op)](
-                ev(node.operand)
-            )
-
+            return _UN[type(node.op)](ev(node.operand))
         if isinstance(node, ast.BinOp) and type(node.op) in _BIN:
-            a = ev(node.left)
-            b = ev(node.right)
-
-            if (
-                isinstance(node.op, ast.Pow)
-                and abs(float(b)) > 100
-            ):
-                raise ValueError(
-                    "Слишком большая степень."
-                )
-
+            a, b = ev(node.left), ev(node.right)
+            if isinstance(node.op, ast.Pow) and abs(float(b)) > 100:
+                raise ValueError("Слишком большая степень.")
             return _BIN[type(node.op)](a, b)
-
-        raise ValueError(
-            "Недопустимое выражение."
-        )
-
+        raise ValueError("Недопустимое выражение.")
     return ev(tree)
 
 
 def extract_math(text):
     s = text.strip()
-
-    if len(s) > 150:
+    if len(s) > 150 or not re.search(r"\d", s):
         return None
-
-    if not re.search(r"\d", s):
+    candidate = re.sub(r"(?i)^(посчитай|вычисли|сколько будет|calculate)\s*", "", s).strip()
+    if not re.fullmatch(r"[0-9\s\+\-\*\/\(\)\.,%×÷]+", candidate):
         return None
-
-    candidate = re.sub(
-        r"(?i)^(посчитай|вычисли|сколько будет|calculate)\s*",
-        "",
-        s,
-    ).strip()
-
-    if not re.fullmatch(
-        r"[0-9\s\+\-\*\/\(\)\.,%×÷]+",
-        candidate,
-    ):
-        return None
-
     try:
         return safe_eval(candidate)
     except Exception:
         return None
 
 
-# ============================================================
-# FILE TOOLS
-# ============================================================
+# ---------------- FILE TOOLS ----------------
 
 def decode_bytes(data):
-    for enc in (
-        "utf-8",
-        "utf-8-sig",
-        "cp1251",
-        "latin-1",
-    ):
+    for enc in ("utf-8", "utf-8-sig", "cp1251", "latin-1"):
         try:
             return data.decode(enc)
         except UnicodeDecodeError:
             pass
-
-    return data.decode(
-        "utf-8",
-        errors="replace",
-    )
+    return data.decode("utf-8", errors="replace")
 
 
 def tg_file(file_id):
-    info = tg(
-        "getFile",
-        {"file_id": file_id},
-    )
-
+    info = tg("getFile", {"file_id": file_id})
     if not info or not info.get("file_path"):
-        raise RuntimeError(
-            "Не удалось получить файл из Telegram."
-        )
-
-    url = (
-        f"https://api.telegram.org/file/"
-        f"bot{BOT_TOKEN}/{info['file_path']}"
-    )
-
-    r = tg_session.get(
-        url,
-        timeout=60,
-    )
-
+        raise RuntimeError("Не удалось получить файл из Telegram.")
+    url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{info['file_path']}"
+    r = tg_session.get(url, timeout=60)
     r.raise_for_status()
-
     if len(r.content) > MAX_FILE_BYTES:
-        raise RuntimeError(
-            "Файл слишком большой."
-        )
-
+        raise RuntimeError("Файл слишком большой.")
     return r.content
 
 
 def read_text_file(name, data):
     suffix = Path(name).suffix.lower()
 
-    if suffix in (
-        ".txt",
-        ".md",
-        ".json",
-        ".csv",
-        ".log",
-        ".py",
-        ".js",
-        ".html",
-        ".css",
-    ):
+    if suffix in (".txt", ".md", ".json", ".csv", ".log", ".py", ".js", ".html", ".css"):
         text = decode_bytes(data)
-
         if suffix == ".json":
             try:
                 obj = json.loads(text)
-                text = json.dumps(
-                    obj,
-                    ensure_ascii=False,
-                    indent=2,
-                )
+                text = json.dumps(obj, ensure_ascii=False, indent=2)
             except Exception:
                 pass
-
         elif suffix == ".csv":
             try:
-                rows = list(
-                    csv.reader(
-                        io.StringIO(text)
-                    )
-                )
-
-                text = "\n".join(
-                    " | ".join(row)
-                    for row in rows
-                )
+                rows = list(csv.reader(io.StringIO(text)))
+                text = "\n".join(" | ".join(row) for row in rows)
             except Exception:
                 pass
-
         return text[:MAX_FILE_TEXT]
 
     if suffix == ".xlsx":
         try:
             from openpyxl import load_workbook
         except ImportError:
-            raise RuntimeError(
-                "Для XLSX нужен пакет openpyxl."
-            )
-
-        wb = load_workbook(
-            io.BytesIO(data),
-            read_only=True,
-            data_only=True,
-        )
-
+            raise RuntimeError("Для XLSX нужен пакет openpyxl.")
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         parts = []
-
         try:
             for ws in wb.worksheets:
-                parts.append(
-                    f"=== Лист: {ws.title} ==="
-                )
-
-                for row in ws.iter_rows(
-                    values_only=True
-                ):
-                    vals = [
-                        ""
-                        if v is None
-                        else str(v)
-                        for v in row
-                    ]
-
+                parts.append(f"=== Лист: {ws.title} ===")
+                for row in ws.iter_rows(values_only=True):
+                    vals = ["" if v is None else str(v) for v in row]
                     if any(vals):
-                        parts.append(
-                            " | ".join(vals)
-                        )
-
-                    if sum(
-                        len(x)
-                        for x in parts
-                    ) > MAX_FILE_TEXT:
-                        break
-
-                if sum(
-                    len(x)
-                    for x in parts
-                ) > MAX_FILE_TEXT:
+                        parts.append(" | ".join(vals))
+                        if sum(len(x) for x in parts) > MAX_FILE_TEXT:
+                            break
+                if sum(len(x) for x in parts) > MAX_FILE_TEXT:
                     break
-
         finally:
             wb.close()
-
-        return "\n".join(parts)[
-            :MAX_FILE_TEXT
-        ]
+        return "\n".join(parts)[:MAX_FILE_TEXT]
 
     if suffix == ".pdf":
         try:
             from pypdf import PdfReader
         except ImportError:
-            raise RuntimeError(
-                "Для PDF нужен пакет pypdf."
-            )
-
-        reader = PdfReader(
-            io.BytesIO(data)
-        )
-
+            raise RuntimeError("Для PDF нужен пакет pypdf.")
+        reader = PdfReader(io.BytesIO(data))
         parts = []
-
         for i, page in enumerate(reader.pages):
             text = page.extract_text() or ""
-
             if text.strip():
-                parts.append(
-                    f"=== Страница {i + 1} ===\n{text}"
-                )
-
-            if sum(
-                len(x)
-                for x in parts
-            ) > MAX_FILE_TEXT:
+                parts.append(f"=== Страница {i + 1} ===\n{text}")
+            if sum(len(x) for x in parts) > MAX_FILE_TEXT:
                 break
-
-        return (
-            "\n\n".join(parts)[:MAX_FILE_TEXT]
-            or "В PDF не удалось извлечь текст."
-        )
+        return "\n\n".join(parts)[:MAX_FILE_TEXT] or "В PDF не удалось извлечь текст."
 
     if suffix == ".docx":
         try:
             from docx import Document
         except ImportError:
-            raise RuntimeError(
-                "Для DOCX нужен пакет python-docx."
-            )
-
-        doc = Document(
-            io.BytesIO(data)
-        )
-
-        parts = [
-            p.text
-            for p in doc.paragraphs
-            if p.text.strip()
-        ]
-
+            raise RuntimeError("Для DOCX нужен пакет python-docx.")
+        doc = Document(io.BytesIO(data))
+        parts = [p.text for p in doc.paragraphs if p.text.strip()]
         for table in doc.tables:
             parts.append("=== Таблица ===")
-
             for row in table.rows:
-                parts.append(
-                    " | ".join(
-                        cell.text.strip()
-                        for cell in row.cells
-                    )
-                )
-
-        return (
-            "\n".join(parts)[:MAX_FILE_TEXT]
-            or "В DOCX нет читаемого текста."
-        )
+                parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+        return "\n".join(parts)[:MAX_FILE_TEXT] or "В DOCX нет читаемого текста."
 
     raise RuntimeError(
-        "Формат пока не поддерживается. "
-        "Поддерживаются TXT, MD, JSON, CSV, LOG, "
+        "Формат пока не поддерживается. Поддерживаются TXT, MD, JSON, CSV, LOG, "
         "PY, JS, HTML, CSS, XLSX, PDF и DOCX."
     )
 
 
 def image_content(data, mime, question):
-    b64 = base64.b64encode(data).decode(
-        "ascii"
-    )
-
+    b64 = base64.b64encode(data).decode("ascii")
     return [
-        {
-            "type": "text",
-            "text": question,
-        },
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": (
-                    f"data:{mime};base64,{b64}"
-                )
-            },
-        },
+        {"type": "text", "text": question},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
     ]
 
 
-# ============================================================
-# FILE CREATION
-# ============================================================
+# ---------------- REAL FILE CREATION ----------------
 
 def make_xlsx(rows, filename):
     try:
         from openpyxl import Workbook
     except ImportError:
-        raise RuntimeError(
-            "Не установлен openpyxl."
-        )
-
+        raise RuntimeError("Не установлен openpyxl.")
     wb = Workbook()
     ws = wb.active
     ws.title = "BulbaMaxAI"
-
     for r in rows:
-        ws.append([
-            str(x)
-            if x is not None
-            else ""
-            for x in r
-        ])
-
+        ws.append([str(x) if x is not None else "" for x in r])
     for col in ws.columns:
-        width = min(
-            max(
-                len(
-                    str(cell.value or "")
-                )
-                for cell in col
-            ) + 2,
-            50,
-        )
-
-        ws.column_dimensions[
-            col[0].column_letter
-        ].width = width
-
+        width = min(max(len(str(cell.value or "")) for cell in col) + 2, 50)
+        ws.column_dimensions[col[0].column_letter].width = width
     path = Path(filename)
     wb.save(path)
-
     return str(path)
 
 
 def make_csv(rows, filename):
     path = Path(filename)
-
-    with open(
-        path,
-        "w",
-        newline="",
-        encoding="utf-8-sig",
-    ) as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         csv.writer(f).writerows(rows)
-
     return str(path)
 
 
 def make_chart(rows, filename):
     try:
         import matplotlib
-
         matplotlib.use("Agg")
-
         import matplotlib.pyplot as plt
-
     except ImportError:
-        raise RuntimeError(
-            "Не установлен matplotlib."
-        )
-
+        raise RuntimeError("Не установлен matplotlib.")
     if len(rows) < 2:
-        raise RuntimeError(
-            "Для графика нужно минимум 2 строки данных."
-        )
-
-    labels = []
-    values = []
-
+        raise RuntimeError("Для графика нужно минимум 2 строки данных.")
+    labels, values = [], []
     for row in rows[1:]:
         if len(row) < 2:
             continue
-
         try:
             labels.append(str(row[0]))
-
-            values.append(
-                float(
-                    str(row[1])
-                    .replace(",", ".")
-                )
-            )
-
+            values.append(float(str(row[1]).replace(",", ".")))
         except ValueError:
             continue
-
     if not values:
-        raise RuntimeError(
-            "Не удалось найти числовые данные для графика."
-        )
-
+        raise RuntimeError("Не удалось найти числовые данные для графика.")
     plt.figure(figsize=(9, 5))
     plt.bar(labels, values)
-    plt.xticks(
-        rotation=35,
-        ha="right",
-    )
+    plt.xticks(rotation=35, ha="right")
     plt.tight_layout()
-
     path = Path(filename)
-
-    plt.savefig(
-        path,
-        dpi=160,
-    )
-
+    plt.savefig(path, dpi=160)
     plt.close()
-
     return str(path)
 
 
-def make_pdf(
-    text,
-    filename,
-    title="BulbaMaxAI",
-):
+def make_pdf(text, filename, title="BulbaMaxAI"):
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import (
-        getSampleStyleSheet,
-        ParagraphStyle,
-    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_LEFT
-    from reportlab.platypus import (
-        SimpleDocTemplate,
-        Paragraph,
-        Spacer,
-    )
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from xml.sax.saxutils import escape
@@ -1361,32 +687,22 @@ def make_pdf(
         topMargin=40,
         bottomMargin=40,
     )
-
+    # Register a Unicode font when available so Cyrillic text does not turn into empty boxes.
     font_name = "Helvetica"
-
     for font_path in (
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
     ):
         if Path(font_path).exists():
             try:
-                pdfmetrics.registerFont(
-                    TTFont(
-                        "BulbaUnicode",
-                        font_path,
-                    )
-                )
-
+                pdfmetrics.registerFont(TTFont("BulbaUnicode", font_path))
                 font_name = "BulbaUnicode"
                 break
-
             except Exception:
                 pass
 
     styles = getSampleStyleSheet()
-
     styles["Title"].fontName = font_name
-
     body = ParagraphStyle(
         "BulbaBody",
         parent=styles["BodyText"],
@@ -1395,2164 +711,810 @@ def make_pdf(
         spaceAfter=8,
         fontName=font_name,
     )
-
-    story = [
-        Paragraph(
-            escape(str(title)),
-            styles["Title"],
-        ),
-        Spacer(1, 10),
-    ]
-
+    story = [Paragraph(escape(str(title)), styles["Title"]), Spacer(1, 10)]
     for block in str(text or "").split("\n"):
         block = block.strip()
-
         if block:
-            story.append(
-                Paragraph(
-                    escape(block),
-                    body,
-                )
-            )
+            story.append(Paragraph(escape(block), body))
         else:
-            story.append(
-                Spacer(1, 6)
-            )
-
+            story.append(Spacer(1, 6))
     doc.build(story)
-
     return str(filename)
 
 
-def make_docx(
-    text,
-    filename,
-    title="BulbaMaxAI",
-):
+def make_docx(text, filename, title="BulbaMaxAI"):
     from docx import Document
-
     doc = Document()
-
-    doc.add_heading(
-        str(title),
-        level=1,
-    )
-
+    doc.add_heading(str(title), level=1)
     for block in str(text or "").split("\n"):
         doc.add_paragraph(block)
-
     doc.save(str(filename))
-
     return str(filename)
 
 
-def send_document(
-    chat_id,
-    path,
-    caption="",
-):
+def send_document(chat_id, path, caption=""):
     with open(path, "rb") as f:
         return tg(
             "sendDocument",
-            {
-                "chat_id": chat_id,
-                "caption": caption[:1000],
-            },
-            files={
-                "document": (
-                    Path(path).name,
-                    f,
-                )
-            },
+            {"chat_id": chat_id, "caption": caption[:1000]},
+            files={"document": (Path(path).name, f)},
             timeout=60,
         )
 
 
-def send_photo(
-    chat_id,
-    path,
-    caption="",
-):
+def send_photo(chat_id, path, caption=""):
     with open(path, "rb") as f:
         return tg(
             "sendPhoto",
-            {
-                "chat_id": chat_id,
-                "caption": caption[:1000],
-            },
-            files={
-                "photo": (
-                    Path(path).name,
-                    f,
-                )
-            },
+            {"chat_id": chat_id, "caption": caption[:1000]},
+            files={"photo": (Path(path).name, f)},
             timeout=60,
         )
 
 
 def parse_rows_from_text(text):
-    lines = [
-        x.strip()
-        for x in text.splitlines()
-        if x.strip()
-    ]
-
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
     rows = []
-
     for line in lines:
         if "|" in line:
-            cells = [
-                x.strip()
-                for x in line.strip("|").split("|")
-            ]
-
+            cells = [x.strip() for x in line.strip("|").split("|")]
         elif ";" in line:
-            cells = [
-                x.strip()
-                for x in line.split(";")
-            ]
-
+            cells = [x.strip() for x in line.split(";")]
         elif "," in line:
-            cells = [
-                x.strip()
-                for x in line.split(",")
-            ]
-
+            cells = [x.strip() for x in line.split(",")]
         else:
-            cells = re.split(
-                r"\s{2,}",
-                line,
-            )
-
+            cells = re.split(r"\s{2,}", line)
         if cells:
             rows.append(cells)
-
     return rows
 
 
-# ============================================================
-# AGENT
-# ============================================================
-
-AGENT_SYSTEM = """Ты — BulbaMaxAI V16, автоматический агент.
-
-Главное правило:
-НЕ заставляй пользователя выбирать режим или инструмент.
-
-Реальные actions:
-
-chat
-calculator
-create_xlsx
-create_csv
-create_chart
-create_pdf
-create_docx
-analyze_file
-vision
-
-Верни ТОЛЬКО один JSON-объект:
-
-{
-  "action":"...",
-  "reason":"кратко",
-  "expression":"...",
-  "rows":[["Колонка 1","Колонка 2"],["значение",123]],
-  "title":"...",
-  "content":"...",
-  "answer_hint":"..."
-}
-
-Правила:
-
-1. Excel/xlsx/таблица для скачивания → create_xlsx.
-2. CSV → create_csv.
-3. График/диаграмма → create_chart.
-4. PDF → create_pdf.
-5. Word/DOCX → create_docx.
-6. Простое математическое выражение → calculator.
-7. Файл → analyze_file.
-8. Изображение → vision.
-9. Иначе → chat.
-
-Не говори, что файл создан, если action его не создаёт.
-Не придумывай отсутствующие факты.
-"""
-
-
-STYLE_PROMPTS = {
-    "normal": "Отвечай естественно и понятно.",
-    "short": "Отвечай кратко, без лишней воды.",
-    "detailed": "Отвечай подробно, структурированно и с объяснениями.",
-}
-
-
-def extract_json_object(text):
-    text = str(text or "").strip()
-
-    if not text:
-        return None
-
-    text = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        text,
-        flags=re.I,
-    )
-
-    text = re.sub(
-        r"\s*```$",
-        "",
-        text,
-    )
-
-    decoder = json.JSONDecoder()
-
-    for pos, ch in enumerate(text):
-        if ch != "{":
-            continue
-
-        try:
-            obj, _ = decoder.raw_decode(
-                text[pos:]
-            )
-
-            if isinstance(obj, dict):
-                return obj
-
-        except json.JSONDecodeError:
-            continue
-
-    return None
-
-
-def choose_candidates_for_agent():
-    return [
-        m["id"]
-        for m in rank_models(
-            get_models(),
-            False,
-        )
-        if not is_bad_model(m["id"])
-    ]
-
-
-def agent_plan(
-    user_text,
-    has_image=False,
-    has_file=False,
-):
-    hints = []
-
+def local_action_plan(text, has_image=False, has_file=False):
+    """Deterministic zero-extra-token router. It never calls an AI model."""
+    t = str(text or "").strip().lower()
+    if not has_image and not has_file and extract_math(text) is not None:
+        return {"action": "calculator"}
     if has_image:
-        hints.append(
-            "Пользователь приложил изображение."
-        )
-
+        return {"action": "vision"}
     if has_file:
-        hints.append(
-            "Пользователь приложил файл."
-        )
-
-    prompt = user_text
-
-    if hints:
-        prompt += (
-            "\n\n"
-            + "\n".join(hints)
-        )
-
-    candidates = choose_candidates_for_agent()
-
-    # Только 2 модели для определения действия.
-    for model in candidates[:2]:
-        out, err, _ = call_ai(
-            [
-                {
-                    "role": "system",
-                    "content": AGENT_SYSTEM,
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-            model,
-        )
-
-        if out:
-            plan = extract_json_object(out)
-
-            if plan and plan.get("action"):
-                return plan
-
-    return {
-        "action": "chat",
-        "reason": "fallback",
-    }
+        return {"action": "analyze_file"}
+    if any(x in t for x in ("excel", "xlsx", "таблиц", "таблицу", "таблица для скач", "сделай таблицу")):
+        return {"action": "create_xlsx"}
+    if "csv" in t:
+        return {"action": "create_csv"}
+    if any(x in t for x in ("график", "диаграмм", "визуализац")):
+        return {"action": "create_chart"}
+    if "pdf" in t:
+        return {"action": "create_pdf"}
+    if any(x in t for x in ("docx", "word-документ", "word документ")):
+        return {"action": "create_docx"}
+    return {"action": "chat"}
 
 
 def style_system(u):
-    memory = u.get(
-        "memory",
-        {},
-    )
-
-    memory_text = json.dumps(
-        memory,
-        ensure_ascii=False,
-    )[:5000]
-
+    memory = u.get("memory", {})
+    memory_text = json.dumps(memory, ensure_ascii=False)[:5000]
     return (
-        "Ты BulbaMaxAI. "
-        + STYLE_PROMPTS.get(
-            u.get("style", "normal"),
-            STYLE_PROMPTS["normal"],
-        )
-        + "\nИспользуй сохранённую память пользователя "
-        "только когда она относится к запросу.\n"
+        "Ты BulbaMaxAI. " + STYLE_PROMPTS.get(u.get("style", "normal"), STYLE_PROMPTS["normal"]) +
+        "\nИспользуй сохранённую память пользователя только когда она относится к запросу.\n"
         f"Память: {memory_text}"
     )
 
 
-# ============================================================
-# HISTORY
-# ============================================================
+def ai_chat(u, messages, vision=False):
+    preferred = None if u.get("model", "auto") == "auto" else u.get("model")
+    candidates = choose_model(u, vision=vision, preferred=preferred)
+    if not candidates:
+        return None, "Нет доступных моделей."
+    last_error = "Не удалось получить ответ."
+    for index, model in enumerate(candidates):
+        content, err, status = call_ai(messages, model)
+        if content:
+            return content, None
+        last_error = err or last_error
+        # Fallback only after an actual failure; never probe multiple models on success.
+        if index == 0 and len(candidates) > 1 and status in (0, 400, 404, 408, 409, 429, 500, 502, 503, 504):
+            continue
+        break
+    return None, last_error
+
 
 def build_history(u):
-    return get_chat(u)["history"][
-        -MAX_HISTORY:
-    ]
+    h = get_chat(u)["history"]
+    return h[-MAX_HISTORY:]
 
 
-def add_history(
-    u,
-    role,
-    content,
-):
+def add_history(u, role, content):
     chat = get_chat(u)
-
-    chat["history"].append(
-        {
-            "role": role,
-            "content": content,
-        }
-    )
-
-    chat["history"] = chat["history"][
-        -MAX_HISTORY:
-    ]
+    chat["history"].append({"role": role, "content": content})
+    chat["history"] = chat["history"][-MAX_HISTORY:]
 
 
-def consume_license_after_success(u):
-    if (
-        os.getenv(
-            "LICENSE_REQUIRED",
-            "0",
-        ).strip() != "1"
-        or is_admin(
-            u.get("_user_id", "")
-        )
-    ):
+def consume_license_after_success(user_id):
+    """Atomically count a successful licensed request after completion."""
+    if os.getenv("LICENSE_REQUIRED", "0").strip() != "1" or is_admin(user_id):
         return True
-
     from licenses import consume_request
-
-    ok, _ = consume_request(
-        u.get("_user_id", "")
-    )
-
+    ok, _ = consume_request(str(user_id))
     return ok
 
 
-def record_success(
-    u,
-    chat,
-    text,
-    answer,
-    kind="text",
-    file_id=None,
-    file_name=None,
-):
-    u["requests"] += 1
-    chat["requests"] += 1
-
-    with DB_LOCK:
-        db["total_requests"] += 1
-
-    add_history(
-        u,
-        "user",
-        text,
-    )
-
-    add_history(
-        u,
-        "assistant",
-        answer,
-    )
-
-    chat["last_prompt"] = text
-
-    chat["last_request"] = {
-        "kind": kind,
-        "text": text,
-        "file_id": file_id,
-        "file_name": file_name,
-    }
-
-    save_db()
-
-    consume_license_after_success(u)
-
-
-# ============================================================
-# DETECT FILE ACTION
-# ============================================================
-
-def should_use_agent(text):
-    s = text.lower()
-
-    keywords = (
-        "excel",
-        "xlsx",
-        "csv",
-        "таблиц",
-        "график",
-        "диаграм",
-        "pdf",
-        "пдф",
-        "word",
-        "docx",
-        "документ",
-        "файл",
-        "скачать",
-        "выгруз",
-        "оформи",
-        "сделай файл",
-    )
-
-    return any(
-        x in s
-        for x in keywords
-    )
-
-
-# ============================================================
-# MAIN AI REQUEST
-# ============================================================
-
-def handle_ai_request(
-    chat_id,
-    u,
-    text,
-    image=None,
-    file_text=None,
-    file_name=None,
-    media_ref=None,
-    preferred_model=None,
-):
+def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None):
     if not allowed_request(u):
-        send_message(
-            chat_id,
-            "⏳ Слишком много запросов. Подожди несколько секунд.",
-            main_keyboard(),
-        )
+        send_message(chat_id, "⏳ Слишком много запросов. Подожди несколько секунд.", main_keyboard())
         return
 
-    status = (
-        f"🧠 {BOT_VERSION}: анализирую задачу…"
-    )
-
+    status = f"🧠 {BOT_VERSION}: анализирую задачу…"
     if image:
         status = "📸 Анализирую изображение…"
-
     elif file_text:
         status = "📎 Читаю и анализирую файл…"
+    status_msg = send_message(chat_id, status)
 
-    status_msg = send_message(
-        chat_id,
-        status,
-    )
-
+    u["requests"] += 1
+    db["total_requests"] += 1
     chat = get_chat(u)
+    chat["requests"] += 1
 
     try:
-        # ----------------------------------------------------
-        # CALCULATOR
-        # ----------------------------------------------------
-
+        # Fast deterministic calculator path.
         calc = extract_math(text)
-
-        if (
-            calc is not None
-            and not image
-            and not file_text
-        ):
-            if (
-                isinstance(calc, float)
-                and (
-                    calc != calc
-                    or abs(calc) == float("inf")
-                )
-            ):
-                raise ValueError(
-                    "Некорректный числовой результат."
-                )
-
-            if (
-                isinstance(calc, float)
-                and calc.is_integer()
-            ):
-                answer = f"🧮 Ответ: {calc:g}"
-            else:
-                answer = f"🧮 Ответ: {calc}"
-
-            record_success(
-                u,
-                chat,
-                text,
-                answer,
-            )
-
+        if calc is not None and not image and not file_text:
+            if isinstance(calc, float) and (calc != calc or abs(calc) == float("inf")):
+                raise ValueError("Некорректный числовой результат.")
+            answer = f"🧮 Ответ: {calc:g}" if isinstance(calc, float) and calc.is_integer() else f"🧮 Ответ: {calc}"
+            add_history(u, "user", text)
+            add_history(u, "assistant", answer)
+            chat["last_prompt"] = text
+            chat["last_request"] = {"kind": "text", "text": text}
+            save_db()
+            if not consume_license_after_success(user_id or chat_id):
+                raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
             if status_msg:
-                edit_message(
-                    chat_id,
-                    status_msg["message_id"],
-                    answer,
-                    retry_keyboard(),
-                )
+                edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
             else:
-                send_message(
-                    chat_id,
-                    answer,
-                    retry_keyboard(),
-                )
-
+                send_message(chat_id, answer, retry_keyboard())
             return
 
-        # ----------------------------------------------------
-        # AGENT ONLY WHEN ACTUALLY NEEDED
-        # ----------------------------------------------------
+        plan = local_action_plan(text, has_image=bool(image), has_file=bool(file_text))
+        action = plan.get("action", "chat")
 
-        plan = {
-            "action": "chat"
-        }
+        if action in ("create_xlsx", "create_csv", "create_chart", "create_pdf", "create_docx"):
+            stem = re.sub(r"[^A-Za-zА-Яа-я0-9_-]+", "_", text[:35]).strip("_") or "bulbamaxai"
+            title = "BulbaMaxAI"
 
-        if (
-            not image
-            and not file_text
-            and should_use_agent(text)
-        ):
-            plan = agent_plan(text)
-
-        action = plan.get(
-            "action",
-            "chat",
-        )
-
-        # ----------------------------------------------------
-        # XLSX / CSV / CHART
-        # ----------------------------------------------------
-
-        if action in (
-            "create_xlsx",
-            "create_csv",
-            "create_chart",
-        ):
-            stem = re.sub(
-                r"[^A-Za-zА-Яа-я0-9_-]+",
-                "_",
-                text[:35],
-            ).strip("_") or "bulbamaxai"
-
-            rows = plan.get("rows")
-
-            if (
-                not isinstance(rows, list)
-                or len(rows) < 2
-            ):
+            if action in ("create_xlsx", "create_csv", "create_chart"):
                 rows = parse_rows_from_text(text)
+                if not isinstance(rows, list) or len(rows) < 2:
+                    rows = parse_rows_from_text(text)
 
-            clean_rows = []
+                # Normalize rows so mixed numeric/string values never break file creation.
+                clean_rows = []
+                for row in rows if isinstance(rows, list) else []:
+                    if isinstance(row, (list, tuple)) and row:
+                        clean_rows.append([
+                            (x if isinstance(x, (int, float)) else str(x))
+                            for x in row
+                        ])
+                rows = clean_rows
 
-            for row in (
-                rows
-                if isinstance(rows, list)
-                else []
-            ):
-                if (
-                    isinstance(
-                        row,
-                        (list, tuple),
-                    )
-                    and row
-                ):
-                    clean_rows.append([
-                        (
-                            x
-                            if isinstance(
-                                x,
-                                (int, float),
-                            )
-                            else str(x)
-                        )
-                        for x in row
-                    ])
-
-            rows = clean_rows
-
-            if len(rows) >= 2:
-                ext = {
-                    "create_xlsx": ".xlsx",
-                    "create_csv": ".csv",
-                    "create_chart": ".png",
-                }[action]
-
-                path = Path(
-                    f"{stem}{ext}"
-                )
-
-                if action == "create_xlsx":
-                    make_xlsx(
-                        rows,
-                        path,
-                    )
-
-                    sent = send_document(
-                        chat_id,
-                        path,
-                        "📊 Готовая таблица Excel",
-                    )
-
-                elif action == "create_csv":
-                    make_csv(
-                        rows,
-                        path,
-                    )
-
-                    sent = send_document(
-                        chat_id,
-                        path,
-                        "📄 Готовый CSV-файл",
-                    )
-
+                if len(rows) < 2:
+                    action = "chat"
                 else:
-                    make_chart(
-                        rows,
-                        path,
-                    )
+                    ext = {"create_xlsx": ".xlsx", "create_csv": ".csv", "create_chart": ".png"}[action]
+                    path = Path(f"{stem}{ext}")
 
-                    sent = send_photo(
-                        chat_id,
-                        path,
-                        "📈 Готовый график",
-                    )
+                    if action == "create_xlsx":
+                        make_xlsx(rows, path)
+                        sent = send_document(chat_id, path, "📊 Готовая таблица Excel")
+                        if not sent:
+                            raise RuntimeError("Telegram не принял Excel-файл.")
+                    elif action == "create_csv":
+                        make_csv(rows, path)
+                        sent = send_document(chat_id, path, "📄 Готовый CSV-файл")
+                        if not sent:
+                            raise RuntimeError("Telegram не принял CSV-файл.")
+                    else:
+                        make_chart(rows, path)
+                        sent = send_photo(chat_id, path, "📈 Готовый график")
+                        if not sent:
+                            raise RuntimeError("Telegram не принял график.")
 
-                if not sent:
-                    raise RuntimeError(
-                        "Telegram не принял файл."
-                    )
+                    try:
+                        path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    add_history(u, "user", text)
+                    add_history(u, "assistant", f"Создан файл: {path.name}")
+                    chat["last_prompt"] = text
+                    chat["last_request"] = {"kind": "text", "text": text}
+                    save_db()
+                    if not consume_license_after_success(user_id or chat_id):
+                        raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
+                    return
 
-                filename = path.name
-
-                try:
-                    path.unlink(
-                        missing_ok=True
-                    )
-                except Exception:
-                    pass
-
-                record_success(
-                    u,
-                    chat,
-                    text,
-                    f"Создан файл: {filename}",
-                )
-
-                return
-
-        # ----------------------------------------------------
-        # PDF / DOCX
-        # ----------------------------------------------------
-
-        if action in (
-            "create_pdf",
-            "create_docx",
-        ):
-            content = str(
-                plan.get("content")
-                or plan.get("answer_hint")
-                or ""
-            ).strip()
-
-            if content:
-                stem = re.sub(
-                    r"[^A-Za-zА-Яа-я0-9_-]+",
-                    "_",
-                    text[:35],
-                ).strip("_") or "bulbamaxai"
-
-                title = str(
-                    plan.get("title")
-                    or "BulbaMaxAI"
-                ).strip()[:120]
-
+            if action in ("create_pdf", "create_docx"):
+                # Generate the document body with the normal single-model AI path,
+                # then render that answer into the requested file format.
+                messages = [{"role": "system", "content": style_system(u)}]
+                messages += build_history(u)
+                messages.append({"role": "user", "content": text})
+                answer, error = ai_chat(u, messages, vision=False)
+                if not answer:
+                    raise RuntimeError(error or "Не удалось подготовить содержимое документа.")
+                ext = ".pdf" if action == "create_pdf" else ".docx"
+                path = Path(f"{stem}{ext}")
                 if action == "create_pdf":
-                    path = Path(
-                        f"{stem}.pdf"
-                    )
-
-                    make_pdf(
-                        content,
-                        path,
-                        title,
-                    )
-
+                    make_pdf(answer, path, title)
                     caption = "📕 Готовый PDF"
-
                 else:
-                    path = Path(
-                        f"{stem}.docx"
-                    )
-
-                    make_docx(
-                        content,
-                        path,
-                        title,
-                    )
-
+                    make_docx(answer, path, title)
                     caption = "📝 Готовый Word-документ"
-
-                sent = send_document(
-                    chat_id,
-                    path,
-                    caption,
-                )
-
-                if not sent:
-                    raise RuntimeError(
-                        "Telegram не принял документ."
-                    )
-
-                filename = path.name
-
+                sent = send_document(chat_id, path, caption)
                 try:
-                    path.unlink(
-                        missing_ok=True
-                    )
+                    path.unlink(missing_ok=True)
                 except Exception:
                     pass
-
-                record_success(
-                    u,
-                    chat,
-                    text,
-                    f"Создан файл: {filename}",
-                )
-
+                if not sent:
+                    raise RuntimeError("Telegram не принял документ.")
+                add_history(u, "user", text)
+                add_history(u, "assistant", answer)
+                chat["last_prompt"] = text
+                chat["last_request"] = {"kind": "text", "text": text}
+                save_db()
+                if not consume_license_after_success(user_id or chat_id):
+                    raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
                 return
-
-        # ----------------------------------------------------
-        # VISION
-        # ----------------------------------------------------
 
         if image:
-            mime = image.get(
-                "mime",
-                "image/jpeg",
-            )
-
-            content = image_content(
-                image["data"],
-                mime,
-                text,
-            )
-
-            messages = [
-                {
-                    "role": "system",
-                    "content": style_system(u),
-                }
-            ]
-
+            mime = image.get("mime", "image/jpeg")
+            content = image_content(image["data"], mime, text)
+            messages = [{"role": "system", "content": style_system(u)}]
             messages += build_history(u)
-
-            messages.append(
-                {
-                    "role": "user",
-                    "content": content,
-                }
-            )
-
-            answer, error = ai_chat(
-                u,
-                messages,
-                vision=True,
-                preferred_model=preferred_model,
-            )
-
-            kind = "image"
-
-        # ----------------------------------------------------
-        # FILE
-        # ----------------------------------------------------
-
+            messages.append({"role": "user", "content": content})
+            answer, error = ai_chat(u, messages, vision=True)
         else:
             prompt = text
-
             if file_text:
-                prompt = (
-                    f"Файл: {file_name}\n\n"
-                    f"Содержимое:\n{file_text}\n\n"
-                    f"Задача пользователя:\n{text}"
-                )
-
-            messages = [
-                {
-                    "role": "system",
-                    "content": style_system(u),
-                }
-            ]
-
+                prompt = f"Файл: {file_name}\n\nСодержимое:\n{file_text}\n\nЗадача пользователя:\n{text}"
+            messages = [{"role": "system", "content": style_system(u)}]
             messages += build_history(u)
-
-            messages.append(
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            )
-
-            answer, error = ai_chat(
-                u,
-                messages,
-                vision=False,
-                preferred_model=preferred_model,
-            )
-
-            kind = (
-                "file"
-                if file_text
-                else "text"
-            )
-
-        # ----------------------------------------------------
-        # ERROR
-        # ----------------------------------------------------
+            messages.append({"role": "user", "content": prompt})
+            answer, error = ai_chat(u, messages, vision=False)
 
         if not answer:
             u["errors"] += 1
-
-            with DB_LOCK:
-                db["total_errors"] += 1
-
+            db["total_errors"] += 1
             save_db()
-
-            msg = (
-                "❌ Не удалось получить ответ.\n\n"
-                + str(
-                    error
-                    or "Неизвестная ошибка"
-                )
-            )
-
+            msg = f"❌ Не удалось получить ответ.\n\n{error or 'Неизвестная ошибка'}"
             if status_msg:
-                edit_message(
-                    chat_id,
-                    status_msg["message_id"],
-                    msg,
-                    main_keyboard(),
-                )
+                edit_message(chat_id, status_msg["message_id"], msg, main_keyboard())
             else:
-                send_message(
-                    chat_id,
-                    msg,
-                    main_keyboard(),
-                )
-
+                send_message(chat_id, msg, main_keyboard())
             return
 
-        # ----------------------------------------------------
-        # SUCCESS
-        # ----------------------------------------------------
-
-        record_success(
-            u,
-            chat,
-            text,
-            answer,
-            kind=kind,
-            file_id=(
-                (media_ref or {}).get("file_id")
-                if media_ref
-                else None
-            ),
-            file_name=file_name,
-        )
+        add_history(u, "user", text)
+        add_history(u, "assistant", answer)
+        chat["last_prompt"] = text
+        last_kind = "image" if image else ("file" if file_text else "text")
+        chat["last_request"] = {
+            "kind": last_kind,
+            "text": text,
+            "file_id": (media_ref or {}).get("file_id") if media_ref else None,
+            "file_name": file_name,
+        }
+        save_db()
+        if not consume_license_after_success(user_id or chat_id):
+            raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
 
         if status_msg:
-            edit_message(
-                chat_id,
-                status_msg["message_id"],
-                answer,
-                retry_keyboard(),
-            )
+            edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
         else:
-            send_message(
-                chat_id,
-                answer,
-                retry_keyboard(),
-            )
+            send_message(chat_id, answer, retry_keyboard())
 
     except Exception as e:
-        print(
-            "Request error:",
-            repr(e),
-        )
-
+        print("Request error:", repr(e))
         u["errors"] += 1
-
-        with DB_LOCK:
-            db["total_errors"] += 1
-
+        db["total_errors"] += 1
         save_db()
-
-        msg = (
-            "❌ Ошибка при обработке запроса. "
-            "Попробуй ещё раз."
-        )
-
+        msg = "❌ Ошибка при обработке запроса. Попробуй ещё раз."
         if status_msg:
-            edit_message(
-                chat_id,
-                status_msg["message_id"],
-                msg,
-                main_keyboard(),
-            )
+            edit_message(chat_id, status_msg["message_id"], msg, main_keyboard())
         else:
-            send_message(
-                chat_id,
-                msg,
-                main_keyboard(),
-            )
+            send_message(chat_id, msg, main_keyboard())
 
-
-# ============================================================
-# STATS / MEMORY / CHATS
-# ============================================================
 
 def show_stats(chat_id, u):
-    send_message(
-        chat_id,
+    send_message(chat_id,
         f"📊 Статистика\n\n"
         f"Запросов: {u['requests']}\n"
         f"Ошибок: {u['errors']}\n"
         f"Чатов: {len(u['chats'])}\n"
         f"Текущий чат: {u['active_chat']}\n"
         f"Всего запросов бота: {db['total_requests']}",
-        main_keyboard(),
-    )
+        main_keyboard())
 
 
 def show_memory(chat_id, u):
-    mem = u.get(
-        "memory",
-        {},
-    )
-
+    mem = u.get("memory", {})
     if not mem:
         text = "💾 Память пуста."
     else:
-        text = (
-            "💾 Память:\n\n"
-            + "\n".join(
-                f"• {k}: {v}"
-                for k, v in mem.items()
-            )
-        )
-
-    send_message(
-        chat_id,
-        text,
-        memory_keyboard(),
-    )
+        text = "💾 Память:\n\n" + "\n".join(f"• {k}: {v}" for k, v in mem.items())
+    send_message(chat_id, text, memory_keyboard())
 
 
 def show_chats(chat_id, u):
     rows = []
-
     for name in u["chats"]:
-        mark = (
-            "✅ "
-            if name == u["active_chat"]
-            else ""
-        )
-
-        rows.append([
-            {
-                "text": mark + name[:45],
-                "callback_data": (
-                    "chat:"
-                    + name[:50]
-                ),
-            }
-        ])
-
-    rows.append([
-        {
-            "text": "➕ Новый чат",
-            "callback_data": "new_chat",
-        }
-    ])
-
-    rows.append([
-        {
-            "text": "⬅️ Назад",
-            "callback_data": "back",
-        }
-    ])
-
-    send_message(
-        chat_id,
-        "💬 Выбери чат:",
-        {
-            "inline_keyboard": rows
-        },
-    )
+        mark = "✅ " if name == u["active_chat"] else ""
+        rows.append([{"text": mark + name[:45], "callback_data": "chat:" + name[:50]}])
+    rows.append([{"text": "➕ Новый чат", "callback_data": "new_chat"}])
+    rows.append([{"text": "⬅️ Назад", "callback_data": "back"}])
+    send_message(chat_id, "💬 Выбери чат:", {"inline_keyboard": rows})
 
 
 def new_chat(u):
     if len(u["chats"]) >= MAX_CHATS:
-        candidates = [
-            (
-                c.get(
-                    "created",
-                    0,
-                ),
-                n,
-            )
-            for n, c in u["chats"].items()
-            if n != u["active_chat"]
-        ]
-
+        # Remove the oldest inactive chat.
+        candidates = [(c.get("created", 0), n) for n, c in u["chats"].items() if n != u["active_chat"]]
         if candidates:
-            _, old = sorted(
-                candidates
-            )[0]
-
+            _, old = sorted(candidates)[0]
             del u["chats"][old]
-
         else:
             return u["active_chat"]
-
     base = "Чат"
     i = 1
-
     while f"{base} {i}" in u["chats"]:
         i += 1
-
     name = f"{base} {i}"
-
     u["chats"][name] = default_chat()
     u["active_chat"] = name
-
     return name
 
 
-# ============================================================
-# TELEGRAM MESSAGE
-# ============================================================
-
-def process_message(msg):
+def _process_message(msg):
     if "chat" not in msg:
         return
-
     chat_id = msg["chat"]["id"]
-
-    user_id = msg.get(
-        "from",
-        {},
-    ).get(
-        "id",
-        chat_id,
-    )
-
-    with get_user_lock(user_id):
-        _process_message_locked(
-            msg,
-            chat_id,
-            user_id,
-        )
-
-
-def _process_message_locked(
-    msg,
-    chat_id,
-    user_id,
-):
+    user_id = msg.get("from", {}).get("id", chat_id)
     u = get_user(user_id)
 
-    u["_user_id"] = str(user_id)
+    text = (msg.get("text") or "").strip()
+    caption = (msg.get("caption") or "").strip()
 
-    text = (
-        msg.get("text")
-        or ""
-    ).strip()
-
-    caption = (
-        msg.get("caption")
-        or ""
-    ).strip()
-
-    # ========================================================
-    # ACCOUNT COMMANDS
-    # ========================================================
-
-    if text.startswith("/myid"):
-        send_message(
-            chat_id,
-            f"🆔 Твой Telegram ID: {user_id}",
-            main_keyboard(),
-        )
-        return
-
-    if text.startswith("/profile"):
-        send_message(
-            chat_id,
-            get_license_status(user_id),
-            main_keyboard(),
-        )
-        return
-
-    if text.startswith("/activate"):
-        code = text[
-            len("/activate"):
-        ].strip()
-
-        if not code:
-            send_message(
-                chat_id,
-                "🔑 Используй: /activate КОД",
-                main_keyboard(),
-            )
+    # Global admin rules are enforced server-side and apply to every user.
+    if text and not text.startswith("/"):
+        rule_answer = get_rule_response(text)
+        if rule_answer:
+            send_message(chat_id, rule_answer, main_keyboard())
             return
 
-        ok, message = activate_license(
-            user_id,
-            code,
-        )
-
-        send_message(
-            chat_id,
-            message,
-            main_keyboard(),
-        )
-
+    # Public access/account commands. AI features are checked below.
+    if text.startswith("/myid"):
+        send_message(chat_id, f"🆔 Твой Telegram ID: {user_id}", main_keyboard())
         return
-
-    # ========================================================
-    # ADMIN
-    # ========================================================
-
+    if text.startswith("/profile"):
+        status = get_license_status(user_id)
+        send_message(chat_id, status, main_keyboard())
+        return
+    if text.startswith("/activate"):
+        code = text[len("/activate"):].strip()
+        if not code:
+            send_message(chat_id, "🔑 Используй: /activate КОД", main_keyboard())
+            return
+        ok, message = activate_license(user_id, code)
+        send_message(chat_id, message, main_keyboard())
+        return
     if text.startswith("/admin"):
         if not is_admin(user_id):
-            send_message(
-                chat_id,
-                "⛔ Нет доступа.",
-                main_keyboard(),
-            )
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard())
             return
-
-        send_message(
-            chat_id,
+        send_message(chat_id,
             "👑 Админ-команды:\n\n"
-            "/give USER_ID DAYS [REQUESTS]\n"
-            "/newcode DAYS [REQUESTS]\n"
-            "/license USER_ID\n"
-            "/revoke USER_ID\n"
-            "/block USER_ID\n"
-            "/unblock USER_ID",
-            main_keyboard(),
-        )
-
+            "/give USER_ID DAYS [REQUESTS] — выдать лицензию\n"
+            "/newcode DAYS [REQUESTS] — создать код\n"
+            "/license USER_ID — статус\n"
+            "/revoke USER_ID — отозвать доступ\n"
+            "/block USER_ID — заблокировать\n"
+            "/unblock USER_ID — разблокировать\n/rules — глобальные правила\n/rule_add TYPE TEXT RESPONSE — добавить правило\n/rule_del ID — удалить правило",
+            main_keyboard())
         return
-
+    if text.startswith("/rules"):
+        if not is_admin(user_id):
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard())
+            return
+        rules = db.get("rules", [])
+        if not rules:
+            send_message(chat_id, "📜 Глобальных правил пока нет.", main_keyboard())
+        else:
+            lines = ["📜 Глобальные правила:"]
+            for r in rules:
+                lines.append(f"\n• {r.get('id')} | {r.get('kind')} | {'ON' if r.get('enabled', True) else 'OFF'}\n  {r.get('pattern')} → {r.get('response')}")
+            send_message(chat_id, "\n".join(lines)[:MAX_REPLY], main_keyboard())
+        return
+    if text.startswith("/rule_add"):
+        if not is_admin(user_id):
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard())
+            return
+        parts = text.split(" ", 3)
+        if len(parts) < 4 or parts[1] not in {"exact", "contains", "similar"}:
+            send_message(chat_id, "Используй: /rule_add exact|contains|similar ТЕКСТ ОТВЕТ", main_keyboard())
+            return
+        try:
+            r = add_rule(parts[1], parts[2], parts[3])
+            send_message(chat_id, f"✅ Правило создано: {r['id']}", main_keyboard())
+        except Exception as e:
+            send_message(chat_id, f"❌ {e}", main_keyboard())
+        return
+    if text.startswith("/rule_del"):
+        if not is_admin(user_id):
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard())
+            return
+        parts = text.split()
+        if len(parts) != 2 or not remove_rule(parts[1]):
+            send_message(chat_id, "❌ Правило не найдено.", main_keyboard())
+        else:
+            send_message(chat_id, "✅ Правило удалено.", main_keyboard())
+        return
     if text.startswith("/newcode"):
         if not is_admin(user_id):
-            send_message(
-                chat_id,
-                "⛔ Нет доступа.",
-                main_keyboard(),
-            )
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard())
             return
-
         parts = text.split()
-
         if len(parts) < 2:
-            send_message(
-                chat_id,
-                "Используй: /newcode DAYS [REQUESTS]",
-                main_keyboard(),
-            )
+            send_message(chat_id, "Используй: /newcode DAYS [REQUESTS]", main_keyboard())
             return
-
         try:
             days = int(parts[1])
-
-            requests_limit = (
-                int(parts[2])
-                if len(parts) > 2
-                else 0
-            )
-
-            code = create_license(
-                days,
-                requests_limit,
-            )
-
-            send_message(
-                chat_id,
-                f"🔑 Новый код:\n\n"
-                f"{code}\n\n"
-                f"Срок: {days} дн.\n"
-                f"Лимит запросов: "
-                f"{'без лимита' if requests_limit <= 0 else requests_limit}",
-                main_keyboard(),
-            )
-
+            requests_limit = int(parts[2]) if len(parts) > 2 else 0
+            code = create_license(days, requests_limit)
+            send_message(chat_id, f"🔑 Новый код:\n\n<code>{code}</code>\n\nСрок: {days} дн.\nЛимит запросов: {'без лимита' if requests_limit <= 0 else requests_limit}", main_keyboard())
         except Exception:
-            send_message(
-                chat_id,
-                "❌ Формат: /newcode DAYS [REQUESTS]",
-                main_keyboard(),
-            )
-
+            send_message(chat_id, "❌ Формат: /newcode DAYS [REQUESTS]", main_keyboard())
         return
-
     if text.startswith("/give"):
         if not is_admin(user_id):
-            send_message(
-                chat_id,
-                "⛔ Нет доступа.",
-                main_keyboard(),
-            )
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard())
             return
-
         parts = text.split()
-
         if len(parts) < 3:
-            send_message(
-                chat_id,
-                "Используй: /give USER_ID DAYS [REQUESTS]",
-                main_keyboard(),
-            )
+            send_message(chat_id, "Используй: /give USER_ID DAYS [REQUESTS]", main_keyboard())
             return
-
         try:
             target = parts[1]
             days = int(parts[2])
-
-            requests_limit = (
-                int(parts[3])
-                if len(parts) > 3
-                else 0
-            )
-
-            code = create_license(
-                days,
-                requests_limit,
-            )
-
-            ok, message = activate_license(
-                target,
-                code,
-            )
-
-            send_message(
-                chat_id,
-                f"{message}\n\nКод: {code}",
-                main_keyboard(),
-            )
-
+            requests_limit = int(parts[3]) if len(parts) > 3 else 0
+            code = create_license(days, requests_limit)
+            ok, message = activate_license(target, code)
+            send_message(chat_id, f"{message}\n\nКод: <code>{code}</code>", main_keyboard())
         except Exception:
-            send_message(
-                chat_id,
-                "❌ Формат: /give USER_ID DAYS [REQUESTS]",
-                main_keyboard(),
-            )
-
+            send_message(chat_id, "❌ Формат: /give USER_ID DAYS [REQUESTS]", main_keyboard())
         return
-
     if text.startswith("/license"):
         if not is_admin(user_id):
-            send_message(
-                chat_id,
-                "⛔ Нет доступа.",
-                main_keyboard(),
-            )
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard())
             return
-
         parts = text.split()
-
         if len(parts) != 2:
-            send_message(
-                chat_id,
-                "Используй: /license USER_ID",
-                main_keyboard(),
-            )
+            send_message(chat_id, "Используй: /license USER_ID", main_keyboard())
             return
-
-        send_message(
-            chat_id,
-            get_license_status(parts[1]),
-            main_keyboard(),
-        )
-
+        send_message(chat_id, get_license_status(parts[1]), main_keyboard())
         return
-
-    if text.startswith(
-        "/revoke"
-    ) or text.startswith(
-        "/block"
-    ) or text.startswith(
-        "/unblock"
-    ):
+    if text.startswith("/revoke") or text.startswith("/block") or text.startswith("/unblock"):
         if not is_admin(user_id):
-            send_message(
-                chat_id,
-                "⛔ Нет доступа.",
-                main_keyboard(),
-            )
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard())
             return
-
         parts = text.split()
-
         if len(parts) != 2:
-            send_message(
-                chat_id,
-                "Укажи USER_ID.",
-                main_keyboard(),
-            )
+            send_message(chat_id, "Укажи USER_ID.", main_keyboard())
             return
-
         target = parts[1]
-
         if text.startswith("/revoke"):
-            msg_text = revoke_user(
-                target
-            )
-
+            msg_text = revoke_user(target)
         elif text.startswith("/block"):
-            msg_text = block_user(
-                target
-            )
-
+            msg_text = block_user(target)
         else:
-            msg_text = unblock_user(
-                target
-            )
-
-        send_message(
-            chat_id,
-            msg_text,
-            main_keyboard(),
-        )
-
+            msg_text = unblock_user(target)
+        send_message(chat_id, msg_text, main_keyboard())
         return
 
-    # ========================================================
-    # LICENSE CHECK
-    # ========================================================
+    if text.startswith("/rule"):
+        if not is_admin(user_id):
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard()); return
+        parts = text.split(" ", 3)
+        if len(parts) < 4:
+            send_message(chat_id, "Используй: /rule contains|exact ТЕКСТ ОТВЕТ", main_keyboard()); return
+        mode = parts[1].strip().lower()
+        try:
+            add_global_rule(parts[2], parts[3], mode=mode)
+            send_message(chat_id, "✅ Глобальное правило добавлено.", main_keyboard())
+        except Exception as e:
+            send_message(chat_id, f"❌ {e}", main_keyboard())
+        return
+    if text == "/rules":
+        if not is_admin(user_id):
+            send_message(chat_id, "⛔ Нет доступа.", main_keyboard()); return
+        rules = get_global_rules(enabled_only=False)
+        if not rules:
+            send_message(chat_id, "📜 Глобальных правил нет.", main_keyboard())
+        else:
+            send_message(chat_id, "📜 Правила:\n\n" + "\n".join([f"• {r.get('id')}: {r.get('pattern')} → {r.get('response')[:120]}" for r in rules]), main_keyboard())
+        return
 
-    if (
-        os.getenv(
-            "LICENSE_REQUIRED",
-            "0",
-        ).strip() == "1"
-        and not is_admin(user_id)
-    ):
-        allowed, reason = user_has_access(
-            user_id
-        )
-
-        if not allowed:
-            send_message(
-                chat_id,
-                reason
-                + "\n\n🔑 Активируй доступ "
-                "командой /activate КОД.",
-                main_keyboard(),
-            )
+    if text and not msg.get("photo") and not msg.get("document"):
+        rule_response = match_global_rule(text)
+        if rule_response:
+            send_message(chat_id, rule_response, main_keyboard())
             return
 
-    # ========================================================
-    # NORMAL COMMANDS
-    # ========================================================
+    if os.getenv("LICENSE_REQUIRED", "0").strip() == "1" and not is_admin(user_id):
+        allowed, reason = user_has_access(user_id)
+        if not allowed:
+            send_message(chat_id, reason + "\n\n🔑 Активируй доступ командой /activate КОД.", main_keyboard())
+            return
 
     if text.startswith("/start"):
-        send_message(
-            chat_id,
-            f"🤖 BulbaMaxAI {BOT_VERSION} готов.\n"
-            "Просто отправь задачу — я сам выберу способ выполнения.",
-            main_keyboard(),
-        )
+        send_message(chat_id, f"🤖 BulbaMaxAI {BOT_VERSION} готов.\nПросто отправь задачу — я сам выберу способ выполнения.", main_keyboard())
         return
-
     if text.startswith("/help"):
-        send_message(
-            chat_id,
-            "Просто отправляй текст, фото или поддерживаемый файл.\n"
-            "Агент сам определит задачу.\n\n"
-            "Команды: /new /clear /stats /memory "
-            "/remember /forget /models",
-            main_keyboard(),
-        )
+        send_message(chat_id, "Просто отправляй текст, фото или поддерживаемый файл. Агент сам определит задачу.\n\nКоманды: /new /clear /stats /memory /remember /forget /models", main_keyboard())
         return
-
     if text.startswith("/new"):
         name = new_chat(u)
         save_db()
-
-        send_message(
-            chat_id,
-            f"🆕 Создан чат «{name}».",
-            main_keyboard(),
-        )
+        send_message(chat_id, f"🆕 Создан чат «{name}».", main_keyboard())
         return
-
     if text.startswith("/clear"):
-        chat = get_chat(u)
-
-        chat["history"] = []
-        chat["last_prompt"] = None
-        chat["last_request"] = None
-
+        get_chat(u)["history"] = []
+        get_chat(u)["last_prompt"] = None
+        get_chat(u)["last_request"] = None
         save_db()
-
-        send_message(
-            chat_id,
-            "🧹 Текущий чат очищен.",
-            main_keyboard(),
-        )
-
+        send_message(chat_id, "🧹 Текущий чат очищен.", main_keyboard())
         return
-
     if text.startswith("/stats"):
-        show_stats(
-            chat_id,
-            u,
-        )
+        show_stats(chat_id, u)
         return
-
     if text.startswith("/memory"):
-        show_memory(
-            chat_id,
-            u,
-        )
+        show_memory(chat_id, u)
         return
-
     if text.startswith("/remember"):
-        arg = text[
-            len("/remember"):
-        ].strip()
-
+        arg = text[len("/remember"):].strip()
         if "=" in arg:
-            k, v = [
-                x.strip()
-                for x in arg.split(
-                    "=",
-                    1,
-                )
-            ]
-
+            k, v = [x.strip() for x in arg.split("=", 1)]
             if k:
                 u["memory"][k] = v[:1000]
                 save_db()
-
-                send_message(
-                    chat_id,
-                    f"💾 Сохранил: {k}",
-                    main_keyboard(),
-                )
-
+                send_message(chat_id, f"💾 Сохранил: {k}", main_keyboard())
             return
-
-        send_message(
-            chat_id,
-            "Используй: /remember ключ=значение",
-            main_keyboard(),
-        )
-
+        send_message(chat_id, "Используй: /remember ключ=значение", main_keyboard())
         return
-
     if text.startswith("/forget"):
-        k = text[
-            len("/forget"):
-        ].strip()
-
+        k = text[len("/forget"):].strip()
         if k:
-            u["memory"].pop(
-                k,
-                None,
-            )
-
+            u["memory"].pop(k, None)
             save_db()
-
-        send_message(
-            chat_id,
-            "🗑 Готово.",
-            main_keyboard(),
-        )
-
+        send_message(chat_id, "🗑 Готово.", main_keyboard())
         return
-
     if text.startswith("/models"):
-        send_message(
-            chat_id,
-            "🧠 Доступные модели:",
-            model_keyboard(u),
-        )
+        send_message(chat_id, "🧠 Доступные модели:", model_keyboard(u))
         return
-
-    # ========================================================
-    # BUTTONS
-    # ========================================================
-
     if text == "🤖 Авто":
         u["model"] = "auto"
         save_db()
-
-        send_message(
-            chat_id,
-            "🤖 Auto включён.",
-            main_keyboard(),
-        )
-
+        send_message(chat_id, "🤖 Auto включён. Модель и способ обработки выбираются автоматически.", main_keyboard())
         return
-
     if text == "🧠 Модель":
-        send_message(
-            chat_id,
-            "🧠 Выбери модель:",
-            model_keyboard(u),
-        )
+        send_message(chat_id, "🧠 Выбери модель:", model_keyboard(u))
         return
-
     if text == "📊 Статистика":
-        show_stats(
-            chat_id,
-            u,
-        )
+        show_stats(chat_id, u)
         return
-
     if text == "💾 Память":
-        show_memory(
-            chat_id,
-            u,
-        )
+        show_memory(chat_id, u)
         return
-
     if text == "💬 Чаты":
-        show_chats(
-            chat_id,
-            u,
-        )
+        show_chats(chat_id, u)
         return
-
     if text == "🆕 Новый чат":
         name = new_chat(u)
         save_db()
-
-        send_message(
-            chat_id,
-            f"🆕 Создан чат «{name}».",
-            main_keyboard(),
-        )
-
+        send_message(chat_id, f"🆕 Создан чат «{name}».", main_keyboard())
         return
-
     if text == "🧹 Очистить":
-        chat = get_chat(u)
-
-        chat["history"] = []
-        chat["last_prompt"] = None
-        chat["last_request"] = None
-
+        get_chat(u)["history"] = []
+        get_chat(u)["last_prompt"] = None
+        get_chat(u)["last_request"] = None
         save_db()
-
-        send_message(
-            chat_id,
-            "🧹 Текущий чат очищен.",
-            main_keyboard(),
-        )
-
+        send_message(chat_id, "🧹 Текущий чат очищен.", main_keyboard())
         return
-
     if text == "⚙️ Настройки":
-        send_message(
-            chat_id,
-            "⚙️ Стиль ответа:",
-            settings_keyboard(
-                u["style"]
-            ),
-        )
+        send_message(chat_id, "⚙️ Стиль ответа:", settings_keyboard(u["style"]))
         return
-
-    # ========================================================
-    # PHOTO
-    # ========================================================
 
     if "photo" in msg:
         photo = msg["photo"][-1]
-
         try:
-            data = tg_file(
-                photo["file_id"]
-            )
-
+            data = tg_file(photo["file_id"])
             if len(data) > MAX_IMAGE_BYTES:
-                raise RuntimeError(
-                    "Изображение слишком большое."
-                )
-
+                raise RuntimeError("Изображение слишком большое.")
             handle_ai_request(
                 chat_id,
                 u,
-                caption
-                or "Что изображено на этом фото? "
-                "Проанализируй изображение.",
-                image={
-                    "data": data,
-                    "mime": "image/jpeg",
-                },
-                media_ref={
-                    "file_id": photo["file_id"]
-                },
+                caption or "Что изображено на этом фото? Проанализируй изображение.",
+                image={"data": data, "mime": "image/jpeg"},
+                media_ref={"file_id": photo["file_id"]},
+                user_id=user_id,
             )
-
         except Exception as e:
-            send_message(
-                chat_id,
-                f"❌ Не удалось обработать изображение: {e}",
-                main_keyboard(),
-            )
-
+            send_message(chat_id, f"❌ Не удалось обработать изображение: {e}", main_keyboard())
         return
-
-    # ========================================================
-    # DOCUMENT
-    # ========================================================
 
     if "document" in msg:
         doc = msg["document"]
-
         try:
-            data = tg_file(
-                doc["file_id"]
-            )
-
-            file_name = doc.get(
-                "file_name",
-                "file.txt",
-            )
-
-            file_text = read_text_file(
-                file_name,
-                data,
-            )
-
+            data = tg_file(doc["file_id"])
+            file_text = read_text_file(doc.get("file_name", "file.txt"), data)
             handle_ai_request(
                 chat_id,
                 u,
-                caption
-                or "Проанализируй этот файл "
-                "и объясни его содержимое.",
+                caption or "Проанализируй этот файл и объясни его содержимое.",
                 file_text=file_text,
-                file_name=file_name,
-                media_ref={
-                    "file_id": doc["file_id"]
-                },
+                file_name=doc.get("file_name", "file.txt"),
+                media_ref={"file_id": doc["file_id"]},
+                user_id=user_id,
             )
-
         except Exception as e:
-            send_message(
-                chat_id,
-                f"❌ Не удалось обработать файл: {e}",
-                main_keyboard(),
-            )
-
+            send_message(chat_id, f"❌ Не удалось обработать файл: {e}", main_keyboard())
         return
-
-    # ========================================================
-    # TEXT
-    # ========================================================
 
     if text:
-        handle_ai_request(
-            chat_id,
-            u,
-            text,
-        )
+        handle_ai_request(chat_id, u, text, user_id=user_id)
 
 
-# ============================================================
-# CALLBACKS
-# ============================================================
-
-def process_callback(q):
-    data = q.get(
-        "data",
-        "",
-    )
-
-    msg = q.get(
-        "message"
-    ) or {}
-
-    chat_id = (
-        msg.get("chat", {})
-        .get("id")
-    )
-
-    user_id = (
-        q.get("from", {})
-        .get("id", chat_id)
-    )
-
+def _process_callback(q):
+    data = q.get("data", "")
+    msg = q.get("message") or {}
+    chat_id = msg.get("chat", {}).get("id")
+    user_id = q.get("from", {}).get("id", chat_id)
     if chat_id is None:
         return
-
-    with get_user_lock(user_id):
-        _process_callback_locked(
-            q,
-            data,
-            msg,
-            chat_id,
-            user_id,
-        )
-
-
-def _process_callback_locked(
-    q,
-    data,
-    msg,
-    chat_id,
-    user_id,
-):
     u = get_user(user_id)
-
-    # ========================================================
-    # BACK
-    # ========================================================
 
     if data == "back":
         answer_callback(q["id"])
-
-        tg(
-            "editMessageText",
-            {
-                "chat_id": chat_id,
-                "message_id": msg.get(
-                    "message_id"
-                ),
-                "text": "🤖 Главное меню",
-            },
-        )
-
-        send_message(
-            chat_id,
-            "Готов.",
-            main_keyboard(),
-        )
-
+        tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": "🤖 Главное меню"})
+        send_message(chat_id, "Готов.", main_keyboard())
         return
-
-    # ========================================================
-    # MEMORY
-    # ========================================================
 
     if data == "memory_clear":
         u["memory"] = {}
-
         save_db()
-
-        answer_callback(
-            q["id"],
-            "Память очищена",
-        )
-
-        tg(
-            "editMessageText",
-            {
-                "chat_id": chat_id,
-                "message_id": msg.get(
-                    "message_id"
-                ),
-                "text": "💾 Память очищена.",
-            },
-        )
-
+        answer_callback(q["id"], "Память очищена")
+        tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": "💾 Память очищена."})
         return
-
-    # ========================================================
-    # STYLE
-    # ========================================================
 
     if data.startswith("style:"):
-        value = data.split(
-            ":",
-            1,
-        )[1]
-
+        value = data.split(":", 1)[1]
         if value not in STYLE_PROMPTS:
-            answer_callback(
-                q["id"],
-                "Неизвестный стиль",
-            )
+            answer_callback(q["id"], "Неизвестный стиль")
             return
-
         u["style"] = value
-
         save_db()
-
-        answer_callback(
-            q["id"],
-            "Стиль изменён",
-        )
-
-        tg(
-            "editMessageText",
-            {
-                "chat_id": chat_id,
-                "message_id": msg.get(
-                    "message_id"
-                ),
-                "text": "⚙️ Стиль ответа изменён.",
-            },
-        )
-
+        answer_callback(q["id"], "Стиль изменён")
+        tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": "⚙️ Стиль ответа изменён."})
         return
 
-    # ========================================================
-    # MODEL
-    # ========================================================
-
     if data.startswith("model:"):
-        value = data.split(
-            ":",
-            1,
-        )[1]
-
+        value = data.split(":", 1)[1]
         if value == "auto":
             u["model"] = "auto"
-
         else:
             try:
                 idx = int(value)
-
-                models = [
-                    m
-                    for m in get_models()
-                    if not is_bad_model(
-                        m["id"]
-                    )
-                ]
-
+                models = [m for m in get_models() if not is_bad_model(m["id"])]
                 if idx < 0 or idx >= len(models):
                     raise ValueError
-
                 u["model"] = models[idx]["id"]
-
             except Exception:
-                answer_callback(
-                    q["id"],
-                    "Модель уже недоступна",
-                )
+                answer_callback(q["id"], "Модель уже недоступна")
                 return
-
         save_db()
-
-        answer_callback(
-            q["id"],
-            "Модель выбрана",
-        )
-
-        tg(
-            "editMessageText",
-            {
-                "chat_id": chat_id,
-                "message_id": msg.get(
-                    "message_id"
-                ),
-                "text": (
-                    f"🧠 Выбрано: "
-                    f"{u['model']}"
-                ),
-            },
-        )
-
+        answer_callback(q["id"], "Модель выбрана")
+        tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": f"🧠 Выбрано: {u['model']}"})
         return
-
-    # ========================================================
-    # NEW CHAT
-    # ========================================================
 
     if data == "new_chat":
         name = new_chat(u)
-
         save_db()
-
-        answer_callback(
-            q["id"],
-            "Новый чат",
-        )
-
-        tg(
-            "editMessageText",
-            {
-                "chat_id": chat_id,
-                "message_id": msg.get(
-                    "message_id"
-                ),
-                "text": (
-                    f"🆕 Создан чат "
-                    f"«{name}»."
-                ),
-            },
-        )
-
+        answer_callback(q["id"], "Новый чат")
+        tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": f"🆕 Создан чат «{name}»."})
         return
-
-    # ========================================================
-    # SELECT CHAT
-    # ========================================================
 
     if data.startswith("chat:"):
-        name = data.split(
-            ":",
-            1,
-        )[1]
-
+        name = data.split(":", 1)[1]
         if name in u["chats"]:
             u["active_chat"] = name
-
             save_db()
-
-            answer_callback(
-                q["id"],
-                "Чат выбран",
-            )
-
-            tg(
-                "editMessageText",
-                {
-                    "chat_id": chat_id,
-                    "message_id": msg.get(
-                        "message_id"
-                    ),
-                    "text": (
-                        f"💬 Активен чат "
-                        f"«{name}»."
-                    ),
-                },
-            )
-
+            answer_callback(q["id"], "Чат выбран")
+            tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": f"💬 Активен чат «{name}»."})
         return
 
-    # ========================================================
-    # RETRY
-    # ========================================================
-
     if data == "retry":
-        last = get_chat(u).get(
-            "last_request"
-        )
-
-        answer_callback(
-            q["id"],
-            "Повторяю",
-        )
-
+        last = get_chat(u).get("last_request")
+        answer_callback(q["id"], "Повторяю")
         if not last:
-            send_message(
-                chat_id,
-                "Нет запроса для повтора.",
-                main_keyboard(),
-            )
+            send_message(chat_id, "Нет запроса для повтора.", main_keyboard())
             return
 
         try:
-            kind = last.get(
-                "kind"
-            )
-
-            if (
-                kind == "image"
-                and last.get("file_id")
-            ):
-                data_bytes = tg_file(
-                    last["file_id"]
-                )
-
+            kind = last.get("kind")
+            if kind == "image" and last.get("file_id"):
+                data_bytes = tg_file(last["file_id"])
                 handle_ai_request(
                     chat_id,
                     u,
-                    last.get(
-                        "text",
-                        "",
-                    ),
-                    image={
-                        "data": data_bytes,
-                        "mime": "image/jpeg",
-                    },
-                    media_ref={
-                        "file_id": last["file_id"]
-                    },
+                    last.get("text", ""),
+                    image={"data": data_bytes, "mime": "image/jpeg"},
+                    media_ref={"file_id": last["file_id"]},
+                    user_id=user_id,
                 )
-
-            elif (
-                kind == "file"
-                and last.get("file_id")
-            ):
-                data_bytes = tg_file(
-                    last["file_id"]
-                )
-
-                name = (
-                    last.get(
-                        "file_name"
-                    )
-                    or "file.txt"
-                )
-
-                file_text = read_text_file(
-                    name,
-                    data_bytes,
-                )
-
+            elif kind == "file" and last.get("file_id"):
+                data_bytes = tg_file(last["file_id"])
+                name = last.get("file_name") or "file.txt"
+                file_text = read_text_file(name, data_bytes)
                 handle_ai_request(
                     chat_id,
                     u,
-                    last.get(
-                        "text",
-                        "",
-                    ),
+                    last.get("text", ""),
                     file_text=file_text,
                     file_name=name,
-                    media_ref={
-                        "file_id": last["file_id"]
-                    },
+                    media_ref={"file_id": last["file_id"]},
+                    user_id=user_id,
                 )
-
             else:
-                handle_ai_request(
-                    chat_id,
-                    u,
-                    last.get(
-                        "text",
-                        "",
-                    ),
-                )
-
+                handle_ai_request(chat_id, u, last.get("text", ""), user_id=user_id)
         except Exception as e:
-            send_message(
-                chat_id,
-                f"❌ Не удалось повторить запрос: {e}",
-                main_keyboard(),
-            )
-
+            send_message(chat_id, f"❌ Не удалось повторить запрос: {e}", main_keyboard())
         return
 
 
-# ============================================================
-# UPDATE WORKER
-# ============================================================
-
-def handle_update(update):
-    try:
-        if "callback_query" in update:
-            process_callback(
-                update["callback_query"]
-            )
-
-        elif "message" in update:
-            process_message(
-                update["message"]
-            )
-
-    except Exception as e:
-        print(
-            "Update error:",
-            repr(e),
-        )
+def process_message(msg):
+    user_id = msg.get("from", {}).get("id", msg.get("chat", {}).get("id"))
+    with get_user_lock(user_id):
+        return _process_message(msg)
 
 
-# ============================================================
-# MAIN
-# ============================================================
+def process_callback(q):
+    user_id = q.get("from", {}).get("id", (q.get("message") or {}).get("chat", {}).get("id"))
+    with get_user_lock(user_id):
+        return _process_callback(q)
+
 
 def main():
-    # launcher.py уже может загрузить БД.
-    # load_db() безопасен и второй раз ничего не делает.
     load_db()
-
-    print(
-        f"BulbaMaxAI {BOT_VERSION} started"
-    )
-
+    print(f"BulbaMaxAI {BOT_VERSION} started")
     offset = None
-
-    # AI-запросы выполняются параллельно.
-    # Один медленный пользователь больше не блокирует всех остальных.
-    executor = ThreadPoolExecutor(
-        max_workers=6,
-        thread_name_prefix="bulba-worker",
-    )
-
-    try:
-        while True:
-            try:
-                params = {
-                    "timeout": POLL_TIMEOUT
-                }
-
-                if offset is not None:
-                    params["offset"] = offset
-
-                updates = tg(
-                    "getUpdates",
-                    params,
-                    timeout=POLL_TIMEOUT + 10,
-                )
-
-                if not updates:
-                    continue
-
-                for update in updates:
-                    offset = (
-                        update["update_id"]
-                        + 1
-                    )
-
-                    executor.submit(
-                        handle_update,
-                        update,
-                    )
-
-            except Exception as e:
-                print(
-                    "Main loop error:",
-                    repr(e),
-                )
-
-                time.sleep(3)
-
-    finally:
-        executor.shutdown(
-            wait=False,
-            cancel_futures=True,
-        )
+    while True:
+        try:
+            params = {"timeout": POLL_TIMEOUT}
+            if offset is not None:
+                params["offset"] = offset
+            updates = tg("getUpdates", params, timeout=POLL_TIMEOUT + 10)
+            if not updates:
+                continue
+            for update in updates:
+                offset = update["update_id"] + 1
+                try:
+                    if "callback_query" in update:
+                        process_callback(update["callback_query"])
+                    elif "message" in update:
+                        process_message(update["message"])
+                except Exception as e:
+                    print("Update error:", repr(e))
+        except Exception as e:
+            print("Main loop error:", repr(e))
+            time.sleep(3)
 
 
 if __name__ == "__main__":
