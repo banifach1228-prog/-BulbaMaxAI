@@ -26,14 +26,14 @@ from licenses import (
 
 import requests
 
-BOT_VERSION = "V16"
+BOT_VERSION = "V17.2"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_KEY = os.getenv("API_KEY", "").strip()
 
 BASE_URL = "https://api.baza-ai.org/v1"
 TG_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-DATA_FILE = "v16_memory.json"
-LEGACY_DATA_FILES = ("v15_memory.json", "v14_memory.json")
+DATA_FILE = "v17_memory.json"
+LEGACY_DATA_FILES = ("v16_memory.json", "v15_memory.json", "v14_memory.json")
 
 MAX_HISTORY = 24
 MAX_CHATS = 30
