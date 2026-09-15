@@ -3,9 +3,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 import urllib.parse
-import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -20,6 +20,9 @@ MAX_MESSAGE = 12000
 MAX_FILE_BYTES = 10 * 1024 * 1024
 AUTH_MAX_AGE = 24 * 60 * 60
 STYLE_VALUES = {"normal", "short", "detailed"}
+_REQUEST_CACHE = {}
+_REQUEST_CACHE_LOCK = __import__("threading").RLock()
+_REQUEST_CACHE_TTL = 90
 ROOT = Path(__file__).resolve().parent
 MINIAPP_FILE = ROOT / "miniapp" / "index.html"
 if not MINIAPP_FILE.exists():
@@ -30,13 +33,26 @@ def send_json(handler, status, data):
     body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Cache-Control", "no-store, max-age=0")
     handler.send_header("X-Content-Type-Options", "nosniff")
     handler.send_header("X-Frame-Options", "DENY")
     handler.send_header("Referrer-Policy", "no-referrer")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def send_html(handler, status, body):
+    raw = body.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.send_header("X-Frame-Options", "DENY")
+    handler.send_header("Referrer-Policy", "no-referrer")
+    handler.send_header("Content-Length", str(len(raw)))
+    handler.end_headers()
+    handler.wfile.write(raw)
 
 
 def read_json(handler):
@@ -178,9 +194,6 @@ def commit_chat(user, chat, text, answer, kind="text"):
     chat["requests"] = int(chat.get("requests") or 0) + 1
     user["requests"] = int(user.get("requests") or 0) + 1
     bot.db["total_requests"] = int(bot.db.get("total_requests") or 0) + 1
-    if not str(chat.get("title") or "").strip() and text:
-        clean = " ".join(text.split())
-        chat["title"] = clean[:42] + ("…" if len(clean) > 42 else "")
 
 
 def decode_upload(item):
@@ -199,7 +212,6 @@ def decode_upload(item):
     if len(data) > MAX_FILE_BYTES:
         raise ValueError("Файл слишком большой. Максимум 10 МБ.")
     return name, mime, data
-
 
 
 def maybe_create_file(text, answer=None):
@@ -229,7 +241,52 @@ def maybe_create_file(text, answer=None):
         try: path.unlink(missing_ok=True)
         except OSError: pass
 
-def handle_chat(uid, user, data):
+
+def answer_text(uid, user, text, data):
+    image = data.get("image")
+    upload = data.get("file")
+    requested = safe_model(data.get("model", user.get("model", "auto")))
+    old = user.get("model", "auto")
+    user["model"] = requested
+    try:
+        if image:
+            if not isinstance(image, str) or not image.startswith("data:image/") or len(image) > MAX_FILE_BYTES * 2:
+                raise ValueError("Некорректное или слишком большое изображение.")
+            content = [{"type":"text","text":text or "Проанализируй изображение."},{"type":"image_url","image_url":{"url":image}}]
+            messages = [{"role":"system","content":bot.style_system(user)}] + bot.build_history(user) + [{"role":"user","content":content}]
+            return bot.ai_chat(user, messages, vision=True), "image"
+        if upload:
+            name, mime, raw = decode_upload(upload)
+            file_text = bot.read_text_file(name, raw)
+            prompt = f"Файл: {name}\n\nСодержимое:\n{file_text}\n\nЗадача пользователя:\n{text or 'Проанализируй файл.'}"
+            messages = [{"role":"system","content":bot.style_system(user)}] + bot.build_history(user) + [{"role":"user","content":prompt}]
+            return bot.ai_chat(user, messages, vision=False), "file"
+        rule = bot.match_global_rule(text)
+        if rule:
+            return (rule, None), "rule"
+        calc = bot.extract_math(text)
+        if calc is not None:
+            answer = f"🧮 Ответ: {calc:g}" if isinstance(calc,float) and calc.is_integer() else f"🧮 Ответ: {calc}"
+            return (answer, None), "text"
+        messages = [{"role":"system","content":bot.style_system(user)}] + bot.build_history(user) + [{"role":"user","content":text}]
+        result = bot.ai_chat(user, messages, vision=False)
+        return result, "text"
+    finally:
+        user["model"] = old
+
+
+def handle_chat(uid, tg_user, user, data):
+    request_id = str(data.get("request_id") or "").strip()[:100]
+    if request_id:
+        now = time.time()
+        with _REQUEST_CACHE_LOCK:
+            for key, item in list(_REQUEST_CACHE.items()):
+                if now - item[0] > _REQUEST_CACHE_TTL:
+                    _REQUEST_CACHE.pop(key, None)
+            cached = _REQUEST_CACHE.get(f"{uid}:{request_id}")
+            if cached and now - cached[0] <= _REQUEST_CACHE_TTL:
+                return cached[1]
+
     allowed, reason = access(uid)
     if not allowed:
         raise PermissionError(reason or "Нужна активная лицензия.")
@@ -243,275 +300,240 @@ def handle_chat(uid, user, data):
     if not bot.allowed_request(user):
         raise ValueError("Слишком много запросов. Подожди немного.")
 
+    # Media Studio is explicit. Do not accidentally turn normal chat into a media job.
     media_kind = bot.detect_media_intent(text)
     if media_kind and not data.get("image") and not data.get("file"):
         model = str(data.get("media_model") or "").strip() or None
         opts = data.get("media_opts") if isinstance(data.get("media_opts"), dict) else {}
         job_id, selected = media_service.create_job(media_kind, text, model=model, opts=opts, user_id=uid)
-        media_service._set_job(job_id, prompt=text[:12000])
-        return {"job_id": job_id, "kind": media_kind, "model": selected["id"], "state": None}
+        media_service._set_job(job_id, prompt=text[:MAX_MESSAGE])
+        return {"job_id": job_id, "kind": media_kind, "model": selected["id"], "state": state(uid,tg_user,user)}
 
-    requested = safe_model(data.get("model", user.get("model", "auto")))
-    old = user.get("model", "auto")
-    user["model"] = requested
-    try:
-        image = data.get("image")
-        upload = data.get("file")
-        kind = "text"
-        if image:
-            if not isinstance(image, str) or not image.startswith("data:image/") or len(image) > 10 * 1024 * 1024:
-                raise ValueError("Некорректное или слишком большое изображение.")
-            content = [{"type": "text", "text": text or "Проанализируй изображение."}, {"type": "image_url", "image_url": {"url": image}}]
-            messages = [{"role": "system", "content": bot.style_system(user)}] + bot.build_history(user) + [{"role": "user", "content": content}]
-            answer, error = bot.ai_chat(user, messages, vision=True)
-            kind = "image"
-        elif upload:
-            name, mime, raw = decode_upload(upload)
-            file_text = bot.read_text_file(name, raw)
-            prompt = f"Файл: {name}\n\nСодержимое:\n{file_text}\n\nЗадача пользователя:\n{text or 'Проанализируй файл.'}"
-            messages = [{"role": "system", "content": bot.style_system(user)}] + bot.build_history(user) + [{"role": "user", "content": prompt}]
-            answer, error = bot.ai_chat(user, messages, vision=False)
-            kind = "file"
-        else:
-            rule = bot.match_global_rule(text)
-            if rule:
-                answer, error = rule, None
-                kind = "rule"
-            else:
-                calc = bot.extract_math(text)
-                if calc is not None:
-                    answer = f"🧮 Ответ: {calc:g}" if isinstance(calc, float) and calc.is_integer() else f"🧮 Ответ: {calc}"
-                    error = None
-                else:
-                    messages = [{"role": "system", "content": bot.style_system(user)}] + bot.build_history(user) + [{"role": "user", "content": text}]
-                    answer, error = bot.ai_chat(user, messages, vision=False)
-    finally:
-        user["model"] = old
-
+    (answer, error), kind = answer_text(uid, user, text, data)
     if not answer:
         user["errors"] = int(user.get("errors") or 0) + 1
         bot.db["total_errors"] = int(bot.db.get("total_errors") or 0) + 1
         bot.save_db()
         raise RuntimeError(error or "Не удалось получить ответ.")
 
+    # Files are generated only when explicitly requested and enough source data exists.
+    output_file = maybe_create_file(text, answer)
     commit_chat(user, chat, text, answer, kind)
     bot.save_db()
     if not bot.consume_license_after_success(uid):
+        # The answer was already produced, so never destroy the successful chat record.
         raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
-    downloadable = maybe_create_file(text, answer=answer) if kind == "text" and text else None
-    return {"answer": answer, "model": requested, "file": downloadable, "state": None}
+    result = {"ok": True, "answer": answer, "state": state(uid,tg_user,user)}
+    if output_file:
+        result["file"] = output_file
+    if request_id:
+        with _REQUEST_CACHE_LOCK:
+            _REQUEST_CACHE[f"{uid}:{request_id}"] = (time.time(), result)
+    return result
 
 
-class MiniAppHandler(BaseHTTPRequestHandler):
-    server_version = "BulbaMiniApp/17"
+def require_admin(uid):
+    if not is_admin(uid):
+        raise PermissionError("Нет доступа.")
+
+
+def media_job_for_user(uid, job_id):
+    item = media_service.job_status(job_id)
+    if not item:
+        raise ValueError("Медиа-задача не найдена.")
+    if str(item.get("user_id")) != str(uid):
+        raise PermissionError("Нет доступа к этой медиа-задаче.")
+    return item
+
+
+def finalize_media(uid, tg_user, user, item):
+    if item.get("status") != "success":
+        return item
+    claimed = media_service.claim_success(item["job_id"])
+    if not claimed:
+        return item
+    # Count a media request exactly once.
+    if not bot.consume_license_after_success(uid):
+        media_service._set_job(item["job_id"], license_error="Лицензионный лимит исчерпан после генерации.")
+        return media_service.job_status(item["job_id"])
+    cid, chat = get_chat(user, None)
+    prompt = str(item.get("prompt") or "Медиа-задача")
+    summary = "Медиа создано: " + ", ".join(item.get("urls") or [])[:2000]
+    bot.add_history(user, "user", prompt)
+    bot.add_history(user, "assistant", summary)
+    chat["last_prompt"] = prompt
+    chat["last_request"] = {"kind": item.get("kind", "media"), "ts": int(time.time())}
+    chat["requests"] = int(chat.get("requests") or 0) + 1
+    user["requests"] = int(user.get("requests") or 0) + 1
+    bot.db["total_requests"] = int(bot.db.get("total_requests") or 0) + 1
+    bot.save_db()
+    return media_service.job_status(item["job_id"]) or item
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "BulbaMiniApp/2.0"
 
     def log_message(self, fmt, *args):
-        print("MiniApp:", fmt % args)
+        print("[MINIAPP]", fmt % args)
 
     def error(self, status, message):
         send_json(self, status, {"ok": False, "error": str(message)})
 
-    def _do_GET(self):
+    def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        if path in ("/", "/index.html"):
+            try:
+                send_html(self, 200, MINIAPP_FILE.read_text(encoding="utf-8"))
+            except OSError:
+                self.error(500, "Mini App файл не найден.")
+            return
+        if path == "/health":
+            send_json(self, 200, {"ok": True, "service": "BulbaMaxAI", "version": bot.BOT_VERSION})
+            return
         try:
-            if path in ("/", "/miniapp", "/miniapp/"):
-                body = MINIAPP_FILE.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Security-Policy", "default-src 'self' https://telegram.org; script-src 'self' https://telegram.org 'unsafe-inline'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers(); self.wfile.write(body); return
-            if path == "/health":
-                send_json(self, 200, {"ok": True, "service": "BulbaMaxAI", "version": bot.BOT_VERSION}); return
             uid, tg_user, user = auth(self)
             if path == "/api/state":
-                send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/media/models":
-                groups = {}
-                for item in media_service.get_catalog():
-                    groups.setdefault(item["kind"], []).append(item)
-                send_json(self, 200, {"ok": True, "models": [x for items in groups.values() for x in items]}); return
-            if path.startswith("/api/media/jobs/"):
-                job_id = path.rsplit("/", 1)[-1]
-                item = media_service.job_status(job_id)
-                if not item or str(item.get("user_id")) != str(uid):
-                    raise ValueError("Медиа-задача не найдена.")
-                if item.get("status") == "success" and not item.get("license_claimed"):
-                    claimed = media_service.claim_success(job_id)
-                    if claimed and not bot.consume_license_after_success(uid):
-                        media_service._set_job(job_id, status="failed", error="Лицензия больше не позволяет засчитать запрос.")
-                        item = media_service.job_status(job_id)
-                    else:
-                        user["requests"] = int(user.get("requests") or 0) + 1
-                        bot.db["total_requests"] = int(bot.db.get("total_requests") or 0) + 1
-                        cid, chat = get_chat(user)
-                        chat["requests"] = int(chat.get("requests") or 0) + 1
-                        chat["last_request"] = {"kind": item.get("kind"), "ts": int(time.time())}
-                        bot.add_history(user, "user", item.get("prompt", "[медиа]"))
-                        bot.add_history(user, "assistant", f"Медиа готово: {item.get('kind')}")
-                        bot.save_db()
-                        item = media_service.job_status(job_id)
-                send_json(self, 200, {"ok": True, **item}); return
+                allowed, reason = access(uid)
+                send_json(self, 200, {"ok": True, "state": state(uid,tg_user,user), "access": {"allowed":allowed,"reason":reason}})
+                return
             if path == "/api/models":
                 allowed, reason = access(uid)
                 if not allowed: raise PermissionError(reason)
-                send_json(self, 200, {"ok": True, "models": models_payload(), "selected": safe_model(user.get("model"))}); return
-            if path == "/api/stats":
-                send_json(self, 200, {"ok": True, "stats": {"requests": int(user.get("requests") or 0), "errors": int(user.get("errors") or 0), "chats": len(user.get("chats", {})), "total_requests": int(bot.db.get("total_requests") or 0), "total_errors": int(bot.db.get("total_errors") or 0), "version": bot.BOT_VERSION}}); return
+                send_json(self, 200, {"ok":True,"models":models_payload(),"selected":user.get("model","auto")})
+                return
+            if path == "/api/media/models":
+                allowed, reason = access(uid)
+                if not allowed: raise PermissionError(reason)
+                send_json(self, 200, {"ok":True,"models":media_service.get_catalog()})
+                return
+            m = re.fullmatch(r"/api/media/jobs/([^/]+)", path)
+            if m:
+                allowed, reason = access(uid)
+                if not allowed: raise PermissionError(reason)
+                item = media_job_for_user(uid, urllib.parse.unquote(m.group(1)))
+                item = finalize_media(uid,tg_user,user,item)
+                send_json(self,200,item)
+                return
             if path == "/api/admin/stats":
-                if not is_admin(uid): raise PermissionError("Нет доступа.")
-                send_json(self, 200, {"ok": True, "stats": {"users": len(bot.db.get("users", {})), "requests": int(bot.db.get("total_requests") or 0), "errors": int(bot.db.get("total_errors") or 0), "rules": len(bot.db.get("rules", [])), "version": bot.BOT_VERSION}}); return
+                require_admin(uid)
+                send_json(self,200,{"ok":True,"stats":{"users":len(bot.db.get("users",{})),"requests":int(bot.db.get("total_requests") or 0),"errors":int(bot.db.get("total_errors") or 0),"rules":len(bot.get_global_rules(False))}})
+                return
             if path == "/api/admin/rules":
-                if not is_admin(uid): raise PermissionError("Нет доступа.")
-                send_json(self, 200, {"ok": True, "rules": bot.get_global_rules(False)}); return
-            if path == "/api/admin/users":
-                if not is_admin(uid): raise PermissionError("Нет доступа.")
-                users = []
-                for user_id, item in bot.db.get("users", {}).items():
-                    users.append({"id": str(user_id), "requests": int(item.get("requests") or 0), "errors": int(item.get("errors") or 0), "chats": len(item.get("chats", {}))})
-                users.sort(key=lambda x: x["requests"], reverse=True)
-                send_json(self, 200, {"ok": True, "users": users[:200]}); return
-            self.error(404, "Страница или API-метод не найден.")
-        except PermissionError as exc: self.error(403, exc)
-        except (ValueError, RuntimeError) as exc: self.error(400, exc)
-        except Exception as exc:
-            print("GET error:", repr(exc)); self.error(500, "Внутренняя ошибка сервера.")
-
-    def do_GET(self):
-        try:
-            path = urllib.parse.urlparse(self.path).path
-            if path in ("/", "/miniapp", "/miniapp/", "/health"):
-                return self._do_GET()
-            uid, _, _ = auth(self)
-            with bot.get_user_lock(uid):
-                return self._do_GET()
+                require_admin(uid)
+                send_json(self,200,{"ok":True,"rules":bot.get_global_rules(False)})
+                return
+            self.error(404,"Endpoint не найден.")
         except PermissionError as exc:
-            self.error(403, exc)
-        except (ValueError, RuntimeError) as exc:
-            self.error(400, exc)
+            self.error(403,str(exc))
+        except ValueError as exc:
+            self.error(400,str(exc))
         except Exception as exc:
-            print("GET lock/auth error:", repr(exc))
-            self.error(500, "Внутренняя ошибка сервера.")
-
-    def _do_POST(self):
-        path = urllib.parse.urlparse(self.path).path
-        try:
-            uid, tg_user, user = auth(self)
-            data = read_json(self)
-            if path == "/api/media/generate":
-                if not access(uid)[0]: raise PermissionError(access(uid)[1])
-                if not bot.allowed_request(user): raise ValueError("Слишком много запросов. Подожди немного.")
-                kind = media_service.normalize_kind(data.get("kind"))
-                prompt = str(data.get("prompt") or "").strip()
-                model = str(data.get("model") or "").strip() or None
-                opts = data.get("opts") if isinstance(data.get("opts"), dict) else {}
-                job_id, selected = media_service.create_job(kind, prompt, model=model, opts=opts, user_id=uid)
-                # Store prompt for accounting/history without exposing secrets.
-                media_service._set_job(job_id, prompt=prompt[:12000])
-                send_json(self, 202, {"ok": True, "job_id": job_id, "kind": kind, "model": selected["id"]}); return
-            if path == "/api/chat":
-                result = handle_chat(uid, user, data)
-                result["state"] = state(uid, tg_user, user)
-                send_json(self, 200, {"ok": True, **result}); return
-            if path == "/api/chat/new":
-                if not access(uid)[0]: raise PermissionError(access(uid)[1])
-                cid = bot.new_chat(user); bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/chat/select":
-                cid, _ = get_chat(user, data.get("chat_id")); user["active_chat"] = cid; bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/chat/rename":
-                cid, chat = get_chat(user, data.get("chat_id")); title = " ".join(str(data.get("title") or "").split()).strip()
-                if not title: raise ValueError("Название не может быть пустым.")
-                chat["title"] = title[:60]; bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/chat/clear":
-                cid, chat = get_chat(user, data.get("chat_id")); chat["history"] = []; chat["last_prompt"] = None; chat["last_request"] = None; chat.pop("title", None); bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/chat/delete":
-                cid, _ = get_chat(user, data.get("chat_id"))
-                if len(user["chats"]) <= 1: raise ValueError("Нельзя удалить последний чат.")
-                del user["chats"][cid]; user["active_chat"] = next(iter(user["chats"])); user["pinned_chats"] = [x for x in user.get("pinned_chats", []) if str(x) != cid]; bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/chat/pin":
-                cid, _ = get_chat(user, data.get("chat_id")); pins = {str(x) for x in user.get("pinned_chats", [])};
-                if bool(data.get("pinned", True)): pins.add(cid)
-                else: pins.discard(cid)
-                user["pinned_chats"] = list(pins)[:20]; bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/settings":
-                if "model" in data: user["model"] = safe_model(data["model"])
-                if "style" in data:
-                    style = str(data["style"]); 
-                    if style not in STYLE_VALUES: raise ValueError("Неизвестный стиль.")
-                    user["style"] = style
-                bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/memory":
-                action = str(data.get("action") or "").lower()
-                if action == "clear": user["memory"] = {}
-                elif action == "set":
-                    key = " ".join(str(data.get("key") or "").split()).strip(); value = " ".join(str(data.get("value") or "").split()).strip()
-                    if not key or not value: raise ValueError("Укажи ключ и значение.")
-                    user.setdefault("memory", {})[key[:80]] = value[:1000]
-                elif action == "delete": user.setdefault("memory", {}).pop(str(data.get("key") or ""), None)
-                else: raise ValueError("Неизвестное действие памяти.")
-                bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/favorite":
-                answer = str(data.get("answer") or "").strip()
-                if not answer: raise ValueError("Пустой ответ.")
-                fav = user.setdefault("favorites", [])
-                item = {"id": int(time.time() * 1000), "text": answer[:12000], "created": int(time.time())}
-                fav.append(item); user["favorites"] = fav[-50:]; bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path == "/api/favorite/delete":
-                fid = str(data.get("id")); user["favorites"] = [x for x in user.get("favorites", []) if str(x.get("id")) != fid]; bot.save_db(); send_json(self, 200, {"ok": True, "state": state(uid, tg_user, user)}); return
-            if path in ("/api/license/activate", "/api/activate"):
-                code = str(data.get("code") or "").strip();
-                if not code: raise ValueError("Введи код.")
-                ok, message = activate_license(uid, code)
-                if not ok: raise ValueError(message)
-                send_json(self, 200, {"ok": True, "message": message, "state": state(uid, tg_user, user)}); return
-            if path.startswith("/api/admin/"):
-                if not is_admin(uid): raise PermissionError("Нет доступа.")
-                if path in ("/api/admin/rule", "/api/admin/rules"):
-                    action = str(data.get("action") or "create")
-                    if action in ("create", "add"):
-                        rule = bot.add_global_rule(data.get("pattern"), data.get("response"), data.get("mode", "contains"), data.get("priority", 0))
-                    elif action in ("delete", "remove"):
-                        if not bot.delete_global_rule(data.get("id")): raise ValueError("Правило не найдено.")
-                        rule = None
-                    elif action == "toggle":
-                        rule = bot.update_global_rule(data.get("id"), enabled=bool(data.get("enabled")))
-                    elif action == "update":
-                        rule = bot.update_global_rule(data.get("id"), pattern=data.get("pattern"), response=data.get("response"), mode=data.get("mode"), priority=data.get("priority"), enabled=data.get("enabled"))
-                    else: raise ValueError("Неизвестное действие правила.")
-                    send_json(self, 200, {"ok": True, "rule": rule, "rules": bot.get_global_rules(False)}); return
-                if path == "/api/admin/license":
-                    target = str(data.get("user_id") or "").strip(); days = int(data.get("days") or 0); limit = int(data.get("requests") or 0)
-                    if not target or days <= 0: raise ValueError("Укажи user_id и days.")
-                    from licenses import create_license
-                    code = create_license(days, limit)
-                    ok, message = activate_license(target, code)
-                    send_json(self, 200, {"ok": ok, "code": code, "message": message}); return
-            self.error(404, "API-метод не найден.")
-        except PermissionError as exc: self.error(403, exc)
-        except (ValueError, RuntimeError) as exc: self.error(400, exc)
-        except Exception as exc:
-            print("POST error:", repr(exc)); self.error(500, "Внутренняя ошибка сервера.")
-
+            print("GET error:",repr(exc))
+            self.error(500,"Внутренняя серверная ошибка.")
 
     def do_POST(self):
         try:
-            uid, _, _ = auth(self)
-            with bot.get_user_lock(uid):
-                return self._do_POST()
+            uid, tg_user, user = auth(self)
+            data = read_json(self)
+            path = urllib.parse.urlparse(self.path).path
+            allowed, reason = access(uid)
+            if path not in ("/api/activate",) and not allowed:
+                raise PermissionError(reason or "Нужна активная лицензия.")
+
+            if path == "/api/chat":
+                send_json(self,200,handle_chat(uid,tg_user,user,data)); return
+            if path == "/api/chat/new":
+                name = bot.new_chat(user); bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/chat/select":
+                cid = str(data.get("chat_id") or "")
+                if cid not in user.get("chats",{}): raise ValueError("Чат не найден.")
+                user["active_chat"] = cid; bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/chat/rename":
+                cid, chat = get_chat(user,data.get("chat_id")); title=" ".join(str(data.get("title") or "").split())[:80]
+                if not title: raise ValueError("Название пустое.")
+                chat["title"] = title; bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/chat/clear":
+                cid, chat = get_chat(user,data.get("chat_id")); chat["history"]=[]; chat["last_prompt"]=None; chat["last_request"]=None; bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/chat/delete":
+                cid, _ = get_chat(user,data.get("chat_id"));
+                if cid == "main": raise ValueError("Главный чат удалить нельзя.")
+                del user["chats"][cid]; user["active_chat"]="main"; bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/chat/pin":
+                cid,_=get_chat(user,data.get("chat_id")); pins={str(x) for x in user.get("pinned_chats",[])}
+                if cid in pins: pins.remove(cid)
+                else: pins.add(cid)
+                user["pinned_chats"]=list(pins); bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/memory":
+                action=str(data.get("action") or "").lower(); mem=user.setdefault("memory",{})
+                if action=="set":
+                    key=" ".join(str(data.get("key") or "").split())[:80]; value=" ".join(str(data.get("value") or "").split())[:1000]
+                    if not key: raise ValueError("Название памяти пустое.")
+                    if not value: raise ValueError("Значение памяти пустое.")
+                    mem[key]=value
+                elif action=="delete": mem.pop(str(data.get("key") or ""),None)
+                elif action=="clear": mem.clear()
+                else: raise ValueError("Неизвестное действие памяти.")
+                bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/favorite":
+                answer=str(data.get("answer") or "").strip()
+                if not answer: raise ValueError("Нечего сохранять.")
+                fav=user.setdefault("favorites",[]); fav.insert(0,{"id":__import__('secrets').token_hex(6),"text":answer[:10000],"created":int(time.time())}); del fav[50:]
+                bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/favorite/delete":
+                fid=str(data.get("id") or ""); user["favorites"]=[x for x in user.get("favorites",[]) if str(x.get("id"))!=fid]; bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/settings":
+                model=safe_model(data.get("model",user.get("model","auto"))); style=str(data.get("style",user.get("style","normal")))
+                if style not in STYLE_VALUES: raise ValueError("Некорректный стиль ответа.")
+                user["model"]=model; user["style"]=style; bot.save_db(); send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/activate":
+                code=str(data.get("code") or "").strip();
+                if not code: raise ValueError("Введи код лицензии.")
+                ok,msg=activate_license(uid,code); send_json(self,200,{"ok":ok,"message":msg,"state":state(uid,tg_user,user)} if ok else {"ok":False,"error":msg}); return
+            if path == "/api/media/generate":
+                kind=data.get("kind"); prompt=str(data.get("prompt") or "").strip(); model=str(data.get("model") or "").strip() or None; opts=data.get("opts") if isinstance(data.get("opts"),dict) else {}
+                job_id,selected=media_service.create_job(kind,prompt,model=model,opts=opts,user_id=uid)
+                media_service._set_job(job_id,prompt=prompt[:MAX_MESSAGE])
+                send_json(self,202,{"ok":True,"job_id":job_id,"kind":media_service.normalize_kind(kind),"model":selected["id"]}); return
+            if path == "/api/admin/rules":
+                require_admin(uid); action=str(data.get("action") or "")
+                if action=="add":
+                    pattern=" ".join(str(data.get("pattern") or "").split())[:500]; response=str(data.get("response") or "")[:4000]; mode=str(data.get("mode") or "contains")
+                    if not pattern or not response: raise ValueError("Фраза и ответ обязательны.")
+                    if mode not in {"contains","exact"}: raise ValueError("Некорректный режим правила.")
+                    bot.add_global_rule(pattern,response,mode=mode); bot.save_db()
+                elif action=="delete": bot.delete_global_rule(str(data.get("id") or "")); bot.save_db()
+                else: raise ValueError("Неизвестное действие правил.")
+                send_json(self,200,{"ok":True,"state":state(uid,tg_user,user)}); return
+            if path == "/api/admin/license":
+                require_admin(uid); target=str(data.get("user_id") or "").strip(); days=int(data.get("days") or 0); requests_limit=int(data.get("requests") or 0)
+                if not target: raise ValueError("USER_ID обязателен.")
+                from licenses import create_license
+                code=create_license(days,requests_limit); ok,msg=activate_license(target,code)
+                if not ok: raise RuntimeError(msg)
+                send_json(self,200,{"ok":True,"code":code,"message":msg,"state":state(uid,tg_user,user)}); return
+            self.error(404,"Endpoint не найден.")
         except PermissionError as exc:
-            self.error(403, exc)
-        except (ValueError, RuntimeError) as exc:
-            self.error(400, exc)
+            self.error(403,str(exc))
+        except ValueError as exc:
+            self.error(400,str(exc))
         except Exception as exc:
-            print("POST lock/auth error:", repr(exc))
-            self.error(500, "Внутренняя ошибка сервера.")
+            print("POST error:",repr(exc))
+            try:
+                user["errors"]=int(user.get("errors") or 0)+1
+                bot.db["total_errors"]=int(bot.db.get("total_errors") or 0)+1
+                bot.save_db()
+            except Exception: pass
+            self.error(500,"Внутренняя серверная ошибка.")
 
 
 def run_server():
-    server = ThreadingHTTPServer((HOST, PORT), MiniAppHandler)
-    print(f"Mini App server: http://{HOST}:{PORT}")
+    server = ThreadingHTTPServer((HOST,PORT),Handler)
+    print(f"BulbaMaxAI Mini App server listening on {HOST}:{PORT}")
     try:
         server.serve_forever()
     finally:
         server.server_close()
+
+
+if __name__ == "__main__":
+    run_server()
