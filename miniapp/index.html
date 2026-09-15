@@ -7,164 +7,2233 @@
 <title>Bulba AI</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{--bg:#0b0c10;--panel:#12141a;--panel2:#191c23;--text:#f5f7fb;--muted:#9299a8;--line:rgba(255,255,255,.08);--accent:#5e8cff;--accent2:#7b61ff;--bubble:#171a21;--good:#55d98a;--danger:#ff667a;--shadow:0 18px 50px rgba(0,0,0,.35);--nav-h:70px;--composer-h:78px;--vvh:100vh}
+:root{
+  --bg:#0b0c10;
+  --panel:#12141a;
+  --panel2:#191c23;
+  --text:#f5f7fb;
+  --muted:#9299a8;
+  --line:rgba(255,255,255,.08);
+  --accent:#5e8cff;
+  --accent2:#7b61ff;
+  --bubble:#171a21;
+  --good:#55d98a;
+  --danger:#ff667a;
+  --shadow:0 18px 50px rgba(0,0,0,.35);
+  --nav-h:70px;
+  --composer-h:78px;
+  --vvh:100vh;
+}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;width:100%;min-height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif}
-html{background:var(--bg)}
-body{min-height:var(--vvh);overflow-x:hidden;padding-bottom:calc(var(--nav-h) + var(--composer-h) + env(safe-area-inset-bottom))}
-body.sheet-open{overflow:hidden}
-button,input,textarea,select{font:inherit}
-button{border:0;color:inherit;cursor:pointer}
-button:disabled{cursor:default}
-#app{min-height:var(--vvh)}
-.top{position:sticky;top:0;z-index:20;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:rgba(11,12,16,.84);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
-.brand{display:flex;align-items:center;gap:10px;min-width:0}
-.logo{width:34px;height:34px;flex:0 0 34px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 8px 24px rgba(94,140,255,.25);font-weight:900}
-.brand b{font-size:17px}
-.brand small{display:block;color:var(--muted);font-size:11px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
-.iconBtn{width:38px;height:38px;flex:0 0 38px;border-radius:12px;background:var(--panel);border:1px solid var(--line);display:grid;place-items:center}
-.screen{padding:14px 14px 24px;max-width:760px;margin:auto;min-height:calc(var(--vvh) - 65px)}
-.hero{padding:22px 4px 12px}
-.hero h1{font-size:29px;letter-spacing:-1px;margin:0 0 7px}
-.hero p{margin:0;color:var(--muted);line-height:1.45}
-.suggestions{display:flex;gap:8px;overflow:auto;padding:8px 0 14px;scrollbar-width:none;overscroll-behavior-x:contain}
+html,body{
+  margin:0;
+  width:100%;
+  min-height:100%;
+  background:var(--bg);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif;
+  overscroll-behavior:none;
+}
+body{
+  min-height:100svh;
+  min-height:100dvh;
+  overflow:hidden;
+}
+button,input,textarea,select{
+  font:inherit;
+}
+button{
+  border:0;
+  color:inherit;
+}
+button:disabled{
+  opacity:.5;
+  pointer-events:none;
+}
+.app{
+  position:relative;
+  width:100%;
+  height:var(--vvh);
+  min-height:100svh;
+  overflow:hidden;
+}
+.topbar{
+  position:fixed;
+  top:0;
+  left:0;
+  right:0;
+  z-index:30;
+  height:calc(58px + env(safe-area-inset-top));
+  padding:env(safe-area-inset-top) 14px 0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  background:rgba(11,12,16,.9);
+  backdrop-filter:blur(18px);
+  -webkit-backdrop-filter:blur(18px);
+  border-bottom:1px solid var(--line);
+}
+.brand{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
+.logo{
+  width:36px;
+  height:36px;
+  border-radius:12px;
+  display:grid;
+  place-items:center;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  box-shadow:0 8px 24px rgba(94,140,255,.25);
+  font-size:18px;
+  font-weight:800;
+}
+.brandText{
+  min-width:0;
+}
+.brandTitle{
+  font-size:16px;
+  font-weight:800;
+  line-height:19px;
+}
+.brandSub{
+  color:var(--muted);
+  font-size:11px;
+  line-height:14px;
+}
+.headerActions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.iconBtn{
+  width:38px;
+  height:38px;
+  border-radius:12px;
+  background:rgba(255,255,255,.06);
+  border:1px solid var(--line);
+  display:grid;
+  place-items:center;
+  font-size:18px;
+  cursor:pointer;
+}
+.content{
+  position:absolute;
+  inset:calc(58px + env(safe-area-inset-top)) 0 calc(var(--nav-h) + env(safe-area-inset-bottom)) 0;
+  overflow:hidden;
+}
+.screen{
+  display:none;
+  width:100%;
+  height:100%;
+}
+.screen.active{
+  display:block;
+}
+.chatScreen{
+  position:relative;
+}
+.messages{
+  position:absolute;
+  inset:0 0 calc(var(--composer-h) + 12px) 0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  padding:18px 14px 22px;
+  scroll-behavior:smooth;
+  -webkit-overflow-scrolling:touch;
+}
+.message{
+  display:flex;
+  width:100%;
+  margin:0 0 13px;
+}
+.message.user{
+  justify-content:flex-end;
+}
+.bubble{
+  max-width:min(88%,620px);
+  padding:11px 13px;
+  border-radius:17px;
+  background:var(--bubble);
+  border:1px solid var(--line);
+  white-space:pre-wrap;
+  word-break:break-word;
+  font-size:15px;
+  line-height:1.42;
+}
+.message.user .bubble{
+  background:linear-gradient(135deg,#315dcf,#5b49c8);
+  border-color:transparent;
+  border-bottom-right-radius:6px;
+}
+.message.assistant .bubble{
+  border-bottom-left-radius:6px;
+}
+.message.system{
+  justify-content:center;
+}
+.message.system .bubble{
+  max-width:92%;
+  background:transparent;
+  border:0;
+  color:var(--muted);
+  font-size:12px;
+  text-align:center;
+}
+.typing{
+  display:flex;
+  align-items:center;
+  gap:5px;
+  min-height:20px;
+}
+.dot{
+  width:6px;
+  height:6px;
+  border-radius:50%;
+  background:#aeb6c8;
+  animation:blink 1s infinite ease-in-out;
+}
+.dot:nth-child(2){animation-delay:.15s}
+.dot:nth-child(3){animation-delay:.3s}
+@keyframes blink{
+  0%,80%,100%{opacity:.25;transform:translateY(0)}
+  40%{opacity:1;transform:translateY(-2px)}
+}
+.empty{
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:40px 22px;
+  text-align:center;
+  pointer-events:none;
+}
+.emptyInner{
+  max-width:390px;
+}
+.emptyLogo{
+  width:72px;
+  height:72px;
+  margin:0 auto 16px;
+  border-radius:23px;
+  display:grid;
+  place-items:center;
+  font-size:34px;
+  font-weight:900;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  box-shadow:0 18px 40px rgba(94,140,255,.22);
+}
+.empty h2{
+  margin:0 0 8px;
+  font-size:23px;
+}
+.empty p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.45;
+  font-size:14px;
+}
+.suggestions{
+  display:flex;
+  gap:8px;
+  overflow-x:auto;
+  padding:0 14px 10px;
+  scrollbar-width:none;
+}
 .suggestions::-webkit-scrollbar{display:none}
-.chip{white-space:nowrap;padding:10px 13px;border-radius:14px;background:var(--panel);border:1px solid var(--line);color:#dce2ed}
-.chat{display:flex;flex-direction:column;gap:12px;padding-bottom:14px}
-.msg{max-width:92%;display:flex;flex-direction:column;gap:5px;animation:up .18s ease;contain:layout paint}
-.msg.user{align-self:flex-end}
-.msg.assistant{align-self:flex-start}
-.bubble{padding:12px 14px;border-radius:18px;background:var(--bubble);border:1px solid var(--line);line-height:1.48;white-space:pre-wrap;overflow-wrap:anywhere}
-.user .bubble{background:linear-gradient(135deg,#2b55a6,#3f49a5);border-color:transparent}
-.meta{font-size:10px;color:var(--muted);padding:0 4px}
-.saveBtn{width:auto!important;margin-top:2px}
-.typing{display:none;gap:5px;align-items:center;color:var(--muted);font-size:12px;padding:2px 4px 12px}
-.typing.show{display:flex}
-.dot{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:pulse 1s infinite}
-.dot:nth-child(2){animation-delay:.15s}.dot:nth-child(3){animation-delay:.3s}
-.composerWrap{position:fixed;left:0;right:0;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom));z-index:30;padding:8px 12px;background:linear-gradient(transparent,rgba(11,12,16,.96) 24%);transition:transform .18s ease}
-.composer{max-width:760px;margin:auto;display:flex;gap:8px;align-items:flex-end;padding:7px;border:1px solid var(--line);border-radius:22px;background:rgba(25,28,35,.94);box-shadow:var(--shadow);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
-.composer textarea{flex:1;resize:none;min-height:42px;max-height:130px;background:transparent;border:0;outline:0;color:var(--text);padding:10px 7px;line-height:1.35}
-.round{width:42px;height:42px;flex:0 0 42px;border-radius:15px;background:var(--panel2);display:grid;place-items:center}
-.send{background:var(--accent);font-size:18px}
-.send:disabled{opacity:.4}
-.nav{position:fixed;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:40;display:flex;justify-content:space-around;background:rgba(18,20,26,.92);border:1px solid var(--line);border-radius:20px;padding:6px;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:var(--shadow)}
-.nav button{background:transparent;color:var(--muted);padding:7px 8px;border-radius:14px;font-size:10px;min-width:58px;transition:background .16s,color .16s,transform .16s}
-.nav button:active,.chip:active,.round:active,.row:active,.primary:active,.secondary:active{transform:scale(.98)}
-.nav button.active{color:var(--text);background:var(--panel2)}
-.nav span{display:block;font-size:18px;margin-bottom:2px}
-.sheet{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.52);display:flex;align-items:flex-end;visibility:hidden;opacity:0;pointer-events:none;transition:opacity .18s ease,visibility .18s ease}
-.sheet.show{visibility:visible;opacity:1;pointer-events:auto}
-.sheetCard{width:100%;max-height:calc(var(--vvh) - 30px);overflow:auto;overscroll-behavior:contain;background:var(--panel);border-radius:24px 24px 0 0;padding:10px 14px calc(18px + env(safe-area-inset-bottom));box-shadow:var(--shadow);transform:translateY(18px);transition:transform .2s ease;-webkit-overflow-scrolling:touch}
-.sheet.show .sheetCard{transform:none}
-.grab{width:42px;height:5px;border-radius:5px;background:#3a3e48;margin:2px auto 12px}
-.sheetHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-.sheetHead h2{font-size:20px;margin:0}
-.close{background:var(--panel2);width:34px;height:34px;border-radius:12px}
-.row{width:100%;display:flex;align-items:center;gap:12px;padding:13px 4px;border-bottom:1px solid var(--line);background:transparent;text-align:left}
-.row:last-child{border-bottom:0}
-.row .grow{flex:1;min-width:0}
-.row b{display:block}
-.row small{color:var(--muted);display:block;margin-top:3px;line-height:1.35}
-.row .arrow{color:var(--muted);font-size:20px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:14px;margin:9px 0;line-height:1.45}
-.sectionTitle{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin:18px 3px 8px}
-.primary{width:100%;padding:13px 15px;border-radius:15px;background:var(--accent);font-weight:700}
-.secondary{width:100%;padding:13px 15px;border-radius:15px;background:var(--panel2);border:1px solid var(--line);margin-top:8px}
-.danger{color:var(--danger)}
-input.field,textarea.field,select.field{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:14px;padding:12px;outline:0;margin:5px 0}
-input.field:focus,textarea.field:focus,select.field:focus{border-color:rgba(94,140,255,.65)}
-.filePreview{display:none;position:fixed;left:12px;right:12px;bottom:calc(var(--nav-h) + var(--composer-h) + env(safe-area-inset-bottom));z-index:32;max-width:760px;margin:auto;gap:8px;align-items:center;padding:8px 5px}
-.filePreview.show{display:flex}
-.fileTag{padding:8px 10px;background:var(--panel2);border:1px solid var(--line);border-radius:11px;font-size:12px;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.empty{text-align:center;padding:35px 12px;color:var(--muted)}
-.toast{position:fixed;left:50%;bottom:calc(var(--nav-h) + 18px + env(safe-area-inset-bottom));transform:translate(-50%,10px);background:#f1f3f7;color:#111;padding:10px 14px;border-radius:13px;opacity:0;pointer-events:none;z-index:100;font-size:13px;box-shadow:var(--shadow);transition:.2s;max-width:min(90vw,520px);text-align:center}
-.toast.show{opacity:1;transform:translate(-50%,0)}
-.adminBadge{color:#ffd76a;font-size:11px;margin-left:5px}
-.hidden{display:none!important}
-.mediaStatus{display:flex;align-items:center;gap:8px}
-.spinner{width:15px;height:15px;border:2px solid rgba(255,255,255,.2);border-top-color:var(--accent);border-radius:50%;animation:spin .75s linear infinite}
-@keyframes up{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
-@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
-@keyframes spin{to{transform:rotate(360deg)}}
-@media(min-width:700px){.nav{max-width:620px;left:50%;right:auto;width:620px;transform:translateX(-50%)}.composerWrap{padding-left:calc((100vw - 760px)/2);padding-right:calc((100vw - 760px)/2)}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+.suggestion{
+  flex:0 0 auto;
+  padding:9px 12px;
+  border-radius:13px;
+  border:1px solid var(--line);
+  background:rgba(255,255,255,.045);
+  color:#dce2ef;
+  font-size:12px;
+}
+.composer{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  z-index:20;
+  min-height:var(--composer-h);
+  padding:8px 12px calc(8px + env(safe-area-inset-bottom));
+  background:linear-gradient(to top,rgba(11,12,16,.98),rgba(11,12,16,.9));
+  backdrop-filter:blur(18px);
+  -webkit-backdrop-filter:blur(18px);
+  border-top:1px solid var(--line);
+}
+.composerRow{
+  display:flex;
+  align-items:flex-end;
+  gap:8px;
+}
+.attachBtn,.sendBtn{
+  flex:0 0 auto;
+  width:43px;
+  height:43px;
+  border-radius:14px;
+  display:grid;
+  place-items:center;
+  background:var(--panel2);
+  border:1px solid var(--line);
+  cursor:pointer;
+}
+.sendBtn{
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border:0;
+}
+.inputWrap{
+  flex:1;
+  min-width:0;
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:17px;
+  padding:7px 10px;
+}
+#input{
+  display:block;
+  width:100%;
+  min-height:28px;
+  max-height:120px;
+  padding:4px 0;
+  resize:none;
+  overflow-y:auto;
+  border:0;
+  outline:0;
+  color:var(--text);
+  background:transparent;
+  font-size:15px;
+  line-height:20px;
+}
+#input::placeholder{
+  color:#737b8d;
+}
+.filePreview{
+  display:none;
+  margin-bottom:7px;
+  padding:7px 9px;
+  border-radius:11px;
+  background:rgba(94,140,255,.1);
+  color:#b9c9ff;
+  font-size:11px;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.filePreview.show{
+  display:flex;
+}
+.filePreviewName{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.nav{
+  position:fixed;
+  left:0;
+  right:0;
+  bottom:0;
+  z-index:40;
+  height:calc(var(--nav-h) + env(safe-area-inset-bottom));
+  padding:4px 8px env(safe-area-inset-bottom);
+  display:grid;
+  grid-template-columns:repeat(5,1fr);
+  background:rgba(15,16,21,.94);
+  backdrop-filter:blur(20px);
+  -webkit-backdrop-filter:blur(20px);
+  border-top:1px solid var(--line);
+}
+.navBtn{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:3px;
+  color:#777f90;
+  background:transparent;
+  font-size:10px;
+  cursor:pointer;
+  border-radius:12px;
+}
+.navBtn .ico{
+  font-size:19px;
+  line-height:20px;
+}
+.navBtn.active{
+  color:#fff;
+}
+.panel{
+  height:100%;
+  overflow-y:auto;
+  padding:18px 14px 28px;
+  -webkit-overflow-scrolling:touch;
+}
+.sectionTitle{
+  margin:0 0 11px;
+  font-size:19px;
+  font-weight:800;
+}
+.sectionSub{
+  margin:-4px 0 16px;
+  color:var(--muted);
+  font-size:12px;
+}
+.card{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:17px;
+  padding:14px;
+  margin-bottom:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.1);
+}
+.row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.row + .row{
+  margin-top:12px;
+}
+.label{
+  font-size:14px;
+  font-weight:650;
+}
+.muted{
+  color:var(--muted);
+  font-size:12px;
+}
+.value{
+  color:#dfe5f0;
+  font-size:13px;
+}
+.primary{
+  width:100%;
+  min-height:45px;
+  border-radius:14px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  font-weight:750;
+  cursor:pointer;
+}
+.secondary{
+  min-height:42px;
+  padding:0 14px;
+  border-radius:13px;
+  background:rgba(255,255,255,.06);
+  border:1px solid var(--line);
+  cursor:pointer;
+}
+.danger{
+  color:#ff8a98;
+}
+.modelGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:9px;
+}
+.modelCard{
+  min-width:0;
+  padding:12px;
+  border-radius:15px;
+  background:rgba(255,255,255,.04);
+  border:1px solid var(--line);
+  cursor:pointer;
+}
+.modelCard.selected{
+  border-color:rgba(94,140,255,.7);
+  background:rgba(94,140,255,.1);
+}
+.modelName{
+  font-size:13px;
+  font-weight:750;
+}
+.modelDesc{
+  margin-top:4px;
+  color:var(--muted);
+  font-size:10px;
+  line-height:1.3;
+}
+.chatList{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.chatItem{
+  padding:13px;
+  border-radius:15px;
+  background:var(--panel);
+  border:1px solid var(--line);
+  cursor:pointer;
+}
+.chatItem.active{
+  border-color:rgba(94,140,255,.65);
+  background:rgba(94,140,255,.08);
+}
+.chatTitle{
+  font-size:14px;
+  font-weight:700;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.chatMeta{
+  margin-top:4px;
+  color:var(--muted);
+  font-size:10px;
+}
+.profileAvatar{
+  width:58px;
+  height:58px;
+  border-radius:19px;
+  display:grid;
+  place-items:center;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  font-size:24px;
+  font-weight:900;
+}
+.statsGrid{
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:9px;
+}
+.stat{
+  padding:14px;
+  border-radius:15px;
+  background:var(--panel);
+  border:1px solid var(--line);
+}
+.statValue{
+  font-size:21px;
+  font-weight:850;
+}
+.statLabel{
+  margin-top:4px;
+  color:var(--muted);
+  font-size:10px;
+}
+.sheetBackdrop{
+  position:fixed;
+  inset:0;
+  z-index:100;
+  display:none;
+  background:rgba(0,0,0,.55);
+  opacity:0;
+  transition:opacity .2s ease;
+}
+.sheetBackdrop.show{
+  display:block;
+  opacity:1;
+}
+.sheet{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  max-height:min(86vh,760px);
+  overflow-y:auto;
+  padding:10px 14px calc(20px + env(safe-area-inset-bottom));
+  background:#15171d;
+  border-top-left-radius:24px;
+  border-top-right-radius:24px;
+  border-top:1px solid var(--line);
+  transform:translateY(100%);
+  transition:transform .25s cubic-bezier(.2,.8,.2,1);
+  box-shadow:0 -20px 60px rgba(0,0,0,.35);
+}
+.sheetBackdrop.show .sheet{
+  transform:translateY(0);
+}
+.sheetHandle{
+  width:38px;
+  height:4px;
+  margin:2px auto 14px;
+  border-radius:999px;
+  background:#505664;
+}
+.sheetTitle{
+  margin-bottom:14px;
+  font-size:18px;
+  font-weight:800;
+}
+.mediaTabs{
+  display:grid;
+  grid-template-columns:repeat(5,1fr);
+  gap:6px;
+  margin-bottom:12px;
+}
+.mediaTab{
+  min-height:37px;
+  border-radius:10px;
+  background:rgba(255,255,255,.05);
+  border:1px solid var(--line);
+  font-size:10px;
+  cursor:pointer;
+}
+.mediaTab.active{
+  background:rgba(94,140,255,.15);
+  border-color:rgba(94,140,255,.65);
+}
+.mediaModels{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:8px;
+  max-height:250px;
+  overflow-y:auto;
+}
+.mediaModel{
+  padding:12px;
+  border-radius:13px;
+  background:rgba(255,255,255,.045);
+  border:1px solid var(--line);
+  cursor:pointer;
+}
+.mediaModel.selected{
+  border-color:rgba(94,140,255,.7);
+  background:rgba(94,140,255,.09);
+}
+.mediaForm{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.fieldLabel{
+  font-size:11px;
+  color:var(--muted);
+  margin-bottom:5px;
+}
+.field{
+  width:100%;
+  border:1px solid var(--line);
+  border-radius:13px;
+  padding:11px 12px;
+  color:var(--text);
+  background:var(--panel);
+  outline:none;
+}
+textarea.field{
+  min-height:100px;
+  resize:vertical;
+}
+.mediaStatus{
+  display:none;
+  padding:11px;
+  border-radius:13px;
+  background:rgba(255,255,255,.045);
+  color:#cbd2df;
+  font-size:12px;
+  line-height:1.4;
+}
+.mediaStatus.show{
+  display:block;
+}
+.result{
+  margin-top:12px;
+  padding:12px;
+  border-radius:14px;
+  background:rgba(85,217,138,.08);
+  border:1px solid rgba(85,217,138,.18);
+}
+.result a{
+  color:#9cc0ff;
+  text-decoration:none;
+  word-break:break-all;
+}
+.toast{
+  position:fixed;
+  left:50%;
+  bottom:calc(var(--nav-h) + 12px + env(safe-area-inset-bottom));
+  z-index:200;
+  transform:translate(-50%,20px);
+  opacity:0;
+  pointer-events:none;
+  max-width:min(90vw,430px);
+  padding:10px 14px;
+  border-radius:13px;
+  background:#252933;
+  border:1px solid var(--line);
+  box-shadow:var(--shadow);
+  font-size:12px;
+  transition:opacity .18s ease,transform .18s ease;
+}
+.toast.show{
+  opacity:1;
+  transform:translate(-50%,0);
+}
+.hidden{
+  display:none!important;
+}
+.spinner{
+  width:16px;
+  height:16px;
+  border:2px solid rgba(255,255,255,.2);
+  border-top-color:#fff;
+  border-radius:50%;
+  animation:spin .7s linear infinite;
+}
+@keyframes spin{
+  to{transform:rotate(360deg)}
+}
+.inline{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+@media (max-width:380px){
+  .modelGrid{grid-template-columns:1fr}
+  .mediaTabs{grid-template-columns:repeat(3,1fr)}
+  .brandSub{display:none}
+  .bubble{max-width:91%}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms!important;
+    animation-iteration-count:1!important;
+    scroll-behavior:auto!important;
+    transition-duration:.001ms!important;
+  }
+}
 </style>
 </head>
 <body>
-<div id="app">
-<header class="top"><div class="brand" id="brand"><div class="logo">B</div><div><b>Bulba AI <span id="adminBadge" class="adminBadge hidden">ADMIN</span></b><small id="status">V17.2 • запуск…</small></div></div><button class="iconBtn" id="profileBtn" aria-label="Профиль">👤</button></header>
-<main class="screen">
-<section class="hero" id="hero"><h1>Чем займёмся?</h1><p>Один запрос — Bulba AI сам выбирает подходящий способ обработки.</p></section>
-<div class="suggestions" id="suggestions"><button class="chip" data-q="Объясни простыми словами">🧠 Объяснить</button><button class="chip" data-q="Реши задачу и покажи решение">✏️ Решить</button><button class="chip" data-q="Переведи на английский">🌐 Перевести</button><button class="chip" data-q="Напиши код для">💻 Код</button><button class="chip" data-q="Сделай краткое резюме">⚡ Кратко</button></div>
-<div id="chat" class="chat"></div><div id="typing" class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>Bulba AI думает…</span></div>
-</main>
-<div class="filePreview" id="filePreview"><div class="fileTag" id="fileName"></div><button class="close" id="removeFile" aria-label="Удалить файл">×</button></div>
-<div class="composerWrap"><div class="composer"><button class="round" id="attach" aria-label="Прикрепить">＋</button><textarea id="input" placeholder="Напиши сообщение…" rows="1" enterkeyhint="send" autocomplete="off" autocorrect="on" spellcheck="true"></textarea><button class="round send" id="send" disabled aria-label="Отправить">↑</button></div></div>
-<nav class="nav"><button class="active" data-tab="chatTab"><span>💬</span>Чат</button><button data-tab="chatsTab"><span>🗂</span>Чаты</button><button data-tab="mediaTab"><span>🎨</span>Медиа</button><button data-tab="memoryTab"><span>💾</span>Память</button><button data-tab="settingsTab"><span>⚙️</span>Настройки</button></nav>
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">B</div>
+      <div class="brandText">
+        <div class="brandTitle">Bulba AI</div>
+        <div class="brandSub" id="headerSub">V17.2 • запуск…</div>
+      </div>
+    </div>
+    <div class="headerActions">
+      <button class="iconBtn" id="newChatBtn" type="button" aria-label="Новый чат">＋</button>
+    </div>
+  </header>
+
+  <main class="content">
+    <section class="screen active chatScreen" id="screen-chat">
+      <div class="messages" id="messages"></div>
+
+      <div class="empty" id="emptyState">
+        <div class="emptyInner">
+          <div class="emptyLogo">B</div>
+          <h2>Чем займёмся?</h2>
+          <p>Задай вопрос, отправь файл или открой Media Studio для генерации контента.</p>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="suggestions" id="suggestions">
+          <button class="suggestion" type="button" data-prompt="Объясни мне эту тему простыми словами">Объясни тему</button>
+          <button class="suggestion" type="button" data-prompt="Помоги решить задачу и объясни решение">Решить задачу</button>
+          <button class="suggestion" type="button" data-prompt="Сделай краткий конспект этой темы">Конспект</button>
+          <button class="suggestion" type="button" data-prompt="Дай мне интересный факт">Интересный факт</button>
+        </div>
+
+        <div class="filePreview" id="filePreview">
+          <span class="filePreviewName" id="filePreviewName"></span>
+          <button class="secondary" id="removeFileBtn" type="button">×</button>
+        </div>
+
+        <div class="composerRow">
+          <button class="attachBtn" id="attachBtn" type="button" aria-label="Файл">📎</button>
+          <div class="inputWrap">
+            <textarea id="input" rows="1" placeholder="Сообщение…"></textarea>
+          </div>
+          <button class="sendBtn" id="sendBtn" type="button" aria-label="Отправить">➤</button>
+        </div>
+        <input id="fileInput" type="file" hidden>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-chats">
+      <div class="panel">
+        <h2 class="sectionTitle">Чаты</h2>
+        <p class="sectionSub">Твои сохранённые диалоги</p>
+        <div class="chatList" id="chatList"></div>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-media">
+      <div class="panel">
+        <h2 class="sectionTitle">Media Studio</h2>
+        <p class="sectionSub">Генерация изображений, видео, музыки, TTS и других доступных медиа.</p>
+
+        <div class="card">
+          <button class="primary" id="openMediaBtn" type="button">Открыть Media Studio</button>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <div>
+              <div class="label">Статус</div>
+              <div class="muted">Последние операции Media Studio</div>
+            </div>
+            <div class="value" id="mediaHomeStatus">Готово</div>
+          </div>
+        </div>
+
+        <div id="mediaHistory"></div>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-settings">
+      <div class="panel">
+        <h2 class="sectionTitle">Настройки</h2>
+        <p class="sectionSub">Персонализация Bulba AI</p>
+
+        <div class="card">
+          <div class="row">
+            <div>
+              <div class="label">Модель</div>
+              <div class="muted">Модель для обычного чата</div>
+            </div>
+            <div class="value" id="currentModel">—</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="label">Доступные модели</div>
+          <div class="muted" style="margin:5px 0 11px">Выбери модель для новых запросов</div>
+          <div class="modelGrid" id="modelGrid"></div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <div>
+              <div class="label">Память</div>
+              <div class="muted">Сохранённые сведения о тебе</div>
+            </div>
+            <button class="secondary" id="memoryBtn" type="button">Открыть</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <button class="secondary" id="clearChatBtn" type="button" style="width:100%">Очистить текущий чат</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-profile">
+      <div class="panel">
+        <h2 class="sectionTitle">Профиль</h2>
+
+        <div class="card">
+          <div class="row">
+            <div class="inline">
+              <div class="profileAvatar" id="profileAvatar">B</div>
+              <div>
+                <div class="label" id="profileName">Пользователь</div>
+                <div class="muted" id="profileId">ID: —</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="statsGrid">
+          <div class="stat">
+            <div class="statValue" id="statRequests">0</div>
+            <div class="statLabel">Запросов</div>
+          </div>
+          <div class="stat">
+            <div class="statValue" id="statFavorites">0</div>
+            <div class="statLabel">Избранных</div>
+          </div>
+          <div class="stat">
+            <div class="statValue" id="statChats">0</div>
+            <div class="statLabel">Чатов</div>
+          </div>
+          <div class="stat">
+            <div class="statValue" id="statLicense">—</div>
+            <div class="statLabel">Лицензия</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:10px">
+          <div class="label">Активация лицензии</div>
+          <div class="muted" style="margin:5px 0 10px">Введи код, если он у тебя есть.</div>
+          <input class="field" id="licenseInput" placeholder="Код лицензии">
+          <button class="primary" id="activateBtn" type="button" style="margin-top:8px">Активировать</button>
+        </div>
+
+        <div class="card hidden" id="adminCard">
+          <div class="label">Админ-панель</div>
+          <div class="muted" style="margin:5px 0 11px">Управление правилами и лицензиями</div>
+          <button class="secondary" id="adminRulesBtn" type="button" style="width:100%">Правила</button>
+          <button class="secondary" id="adminStatsBtn" type="button" style="width:100%;margin-top:8px">Статистика</button>
+          <button class="secondary" id="adminLicenseBtn" type="button" style="width:100%;margin-top:8px">Лицензии</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="nav">
+    <button class="navBtn active" type="button" data-screen="chat">
+      <span class="ico">💬</span>
+      <span>Чат</span>
+    </button>
+    <button class="navBtn" type="button" data-screen="chats">
+      <span class="ico">🗂️</span>
+      <span>Чаты</span>
+    </button>
+    <button class="navBtn" type="button" data-screen="media">
+      <span class="ico">✨</span>
+      <span>Media</span>
+    </button>
+    <button class="navBtn" type="button" data-screen="settings">
+      <span class="ico">⚙️</span>
+      <span>Настройки</span>
+    </button>
+    <button class="navBtn" type="button" data-screen="profile">
+      <span class="ico">👤</span>
+      <span>Профиль</span>
+    </button>
+  </nav>
 </div>
-<input id="file" type="file" hidden accept="image/*,.txt,.md,.json,.csv,.log,.py,.js,.html,.css,.xlsx,.pdf,.docx">
-<div id="sheet" class="sheet" aria-hidden="true"><div class="sheetCard" id="sheetCard"></div></div>
-<div id="toast" class="toast"></div>
+
+<div class="sheetBackdrop" id="sheetBackdrop">
+  <div class="sheet" id="sheet">
+    <div class="sheetHandle"></div>
+    <div class="sheetTitle" id="sheetTitle">Media Studio</div>
+
+    <div id="mediaStudio">
+      <div class="mediaTabs" id="mediaTabs">
+        <button class="mediaTab active" type="button" data-kind="image">Фото</button>
+        <button class="mediaTab" type="button" data-kind="video">Видео</button>
+        <button class="mediaTab" type="button" data-kind="tts">TTS</button>
+        <button class="mediaTab" type="button" data-kind="music">Музыка</button>
+        <button class="mediaTab" type="button" data-kind="3d">3D</button>
+      </div>
+
+      <div class="mediaModels" id="mediaModels"></div>
+
+      <div class="mediaForm" style="margin-top:12px">
+        <div>
+          <div class="fieldLabel">Промпт</div>
+          <textarea class="field" id="mediaPrompt" placeholder="Опиши, что нужно создать…"></textarea>
+        </div>
+
+        <div id="mediaExtraFields"></div>
+
+        <button class="primary" id="generateMediaBtn" type="button">Сгенерировать</button>
+
+        <div class="mediaStatus" id="mediaStatus"></div>
+        <div id="mediaResult"></div>
+      </div>
+    </div>
+
+    <div id="memoryStudio" class="hidden">
+      <div class="card">
+        <div class="fieldLabel">Память</div>
+        <textarea class="field" id="memoryText" placeholder="Здесь будут сохранённые сведения…"></textarea>
+        <button class="primary" id="saveMemoryBtn" type="button" style="margin-top:9px">Сохранить</button>
+      </div>
+    </div>
+
+    <div id="adminStudio" class="hidden"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
-(()=>{
-'use strict';
-const tg=window.Telegram?.WebApp;
-tg?.ready?.(); tg?.expand?.();
-const $=id=>document.getElementById(id);
-const chat=$('chat'),input=$('input'),send=$('send'),file=$('file'),sheet=$('sheet'),sheetCard=$('sheetCard'),toastEl=$('toast');
-const S={state:null,models:[],mediaModels:null,sending:false,init:tg?.initData||'',file:null,loading:false};
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-function toast(t){toastEl.textContent=String(t||'');toastEl.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>toastEl.classList.remove('show'),2300)}
-function haptic(type='light'){try{tg?.HapticFeedback?.impactOccurred(type)}catch{}}
-function setViewport(){const vv=window.visualViewport;const h=Math.round(vv?.height||window.innerHeight);document.documentElement.style.setProperty('--vvh',h+'px');document.body.classList.toggle('keyboard-open',!!vv&&window.innerHeight-vv.height>120)}
-if(window.visualViewport){visualViewport.addEventListener('resize',setViewport,{passive:true});visualViewport.addEventListener('scroll',setViewport,{passive:true})}window.addEventListener('resize',setViewport,{passive:true});setViewport();
-function lockSheet(){document.body.classList.add('sheet-open');sheet.setAttribute('aria-hidden','false')}
-function unlockSheet(){document.body.classList.remove('sheet-open');sheet.setAttribute('aria-hidden','true')}
-function closeSheet(){sheet.classList.remove('show');unlockSheet();setTimeout(()=>{if(!sheet.classList.contains('show'))sheetCard.replaceChildren()},200)}
-function openSheet(title,html){sheetCard.innerHTML=`<div class="grab"></div><div class="sheetHead"><h2>${esc(title)}</h2><button class="close" id="closeSheet" aria-label="Закрыть">×</button></div>${html}`;sheet.classList.add('show');lockSheet();$('closeSheet').onclick=closeSheet;requestAnimationFrame(()=>sheetCard.scrollTop=0)}
-sheet.addEventListener('click',e=>{if(e.target===sheet)closeSheet()});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&sheet.classList.contains('show'))closeSheet()});
-async function api(path,opt={}){const ctrl=new AbortController();const timeout=opt.timeout||90000;const timer=setTimeout(()=>ctrl.abort(),timeout);try{const headers={'Content-Type':'application/json','X-Telegram-Init-Data':S.init,...(opt.headers||{})};const r=await fetch(path,{...opt,headers,signal:ctrl.signal,cache:'no-store'});const d=await r.json().catch(()=>({error:'Некорректный ответ сервера'}));if(!r.ok)throw new Error(d.error||d.message||`Ошибка сервера (${r.status})`);return d}finally{clearTimeout(timer)}}
-function activeChat(){return (S.state?.chats||[]).find(c=>c.id===S.state?.active_chat)||{}}
-function updateSend(){send.disabled=S.sending||(!input.value.trim()&&!S.file)}
-function resize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,130)+'px';updateSend()}
-function scrollBottom(smooth=true){requestAnimationFrame(()=>{const top=Math.max(0,document.documentElement.scrollHeight-window.innerHeight);window.scrollTo({top,behavior:smooth?'smooth':'auto'})})}
-function renderChat(history){chat.replaceChildren();const list=Array.isArray(history)?history.filter(m=>m&&['user','assistant'].includes(m.role)):[];const empty=!list.length;$('hero').classList.toggle('hidden',!empty);$('suggestions').classList.toggle('hidden',!empty);const frag=document.createDocumentFragment();for(const m of list)frag.appendChild(makeBubble(m.role,m.content,false));chat.appendChild(frag);if(list.length)scrollBottom(false)}
-function makeBubble(role,text,scroll=true){const el=document.createElement('div');el.className=`msg ${role}`;const bubble=document.createElement('div');bubble.className='bubble';bubble.textContent=String(text??'');const meta=document.createElement('div');meta.className='meta';meta.textContent=role==='user'?'Вы':'Bulba AI';el.append(bubble,meta);if(role==='assistant'){const b=document.createElement('button');b.className='secondary saveBtn';b.textContent='⭐ Сохранить';b.dataset.answer=String(text??'');b.onclick=async()=>{const d=await action('/api/favorite',{answer:b.dataset.answer});if(d?.ok)toast('Сохранено в избранное')};el.appendChild(b)}if(scroll){chat.appendChild(el);scrollBottom(true)}return el}
-function addBubble(role,text,scroll=true){const el=makeBubble(role,text,false);chat.appendChild(el);if(scroll)scrollBottom(true);return el}
-function applyState(state){if(!state)return;S.state=state;$('status').textContent=`${state.version||'V17.2'} • ${state.license?.active?'доступ активен':'доступ ограничен'}`;$('adminBadge').classList.toggle('hidden',!state.is_admin);updateSend()}
-async function refreshState(render=true){const d=await api('/api/state');if(render){applyState(d.state);renderChat(activeChat().messages||[])}else applyState(d.state);return d.state}
-async function load(){if(!S.init){$('status').textContent='Открой через Telegram';toast('Открой Mini App через Telegram.');return}S.loading=true;try{const [a,b]=await Promise.all([api('/api/state'),api('/api/models')]);S.models=b.models||[];applyState(a.state);renderChat(activeChat().messages||[])}catch(e){$('status').textContent='Ошибка подключения';toast(e.message)}finally{S.loading=false}}
-function requestId(){return `${Date.now()}-${Math.random().toString(36).slice(2)}`}
-async function action(path,body){try{const d=await api(path,{method:'POST',body:JSON.stringify(body||{})});if(d.state){applyState(d.state);renderChat(activeChat().messages||[])}haptic('light');return d}catch(e){toast(e.message);return null}}
-function clearFile(){S.file=null;$('filePreview').classList.remove('show');$('fileName').textContent='';file.value='';updateSend()}
-function readData(f){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(f)})}
-async function chooseFile(f){if(!f)return;if(f.size===0)return toast('Файл пустой');if(f.size>10*1024*1024)return toast('Файл больше 10 МБ');try{const data=await readData(f);S.file={name:f.name,data,kind:f.type.startsWith('image/')?'image':'file'};$('fileName').textContent=f.name;$('filePreview').classList.add('show');updateSend();haptic('light')}catch{toast('Не удалось прочитать файл')}}
-function mediaResultHtml(d,kind){let html=`<div class="card"><b>✅ Готово</b><small>${esc(d.model||'Auto')}</small></div>`;if(d.text)html+=`<div class="card">${esc(d.text)}</div>`;for(const u of Array.isArray(d.urls)?d.urls:[]){const url=esc(u);if(kind==='image')html+=`<img src="${url}" alt="Результат" loading="lazy" style="width:100%;border-radius:16px;margin-top:8px">`;else if(kind==='video')html+=`<video src="${url}" controls playsinline preload="metadata" style="width:100%;border-radius:16px;margin-top:8px"></video>`;else if(kind==='tts'||kind==='music')html+=`<audio src="${url}" controls preload="metadata" style="width:100%;margin-top:8px"></audio>`;else html+=`<a class="primary" style="display:block;text-align:center;text-decoration:none;margin-top:8px" href="${url}" target="_blank" rel="noopener">Открыть 3D-файл</a>`}return html}
-async function pollMediaJob(jobId,timeoutMs=660000,onProgress){const started=Date.now();let delay=2200;while(Date.now()-started<timeoutMs){const d=await api('/api/media/jobs/'+encodeURIComponent(jobId),{timeout:30000});if(d.status==='success')return d;if(d.status==='failed')throw new Error(d.error||'Медиа-задача завершилась ошибкой.');onProgress?.(d);await sleep(delay);delay=Math.min(8000,Math.round(delay*1.55))}throw new Error('Медиа-задача выполняется слишком долго.')}
-async function sendMessage(){if(S.sending)return;const text=input.value.trim();if(!text&&!S.file)return;S.sending=true;updateSend();const f=S.file;input.value='';resize();clearFile();addBubble('user',text||`[${f?.name||'файл'}]`);$('typing').classList.add('show');try{const body={message:text,model:S.state?.model||'auto',chat_id:S.state?.active_chat,request_id:requestId()};if(f){if(f.kind==='image')body.image=f.data;else body.file={name:f.name,data:f.data}}const d=await api('/api/chat',{method:'POST',body:JSON.stringify(body),timeout:90000});$('typing').classList.remove('show');if(d.job_id){const status=addBubble('assistant','⏳ Медиа-задача запущена…');const done=await pollMediaJob(d.job_id,660000,j=>{const label=j.status==='submitting'?'⏳ Отправляем в генератор…':'⏳ Генерация выполняется…';const b=status.querySelector('.bubble');if(b)b.textContent=label});status.replaceWith(makeBubble('assistant',mediaResultHtml(done,done.kind),false));await refreshState(false)}else{addBubble('assistant',d.answer||'');if(d.file)downloadFile(d.file);if(d.state)applyState(d.state)}haptic('light')}catch(e){$('typing').classList.remove('show');addBubble('assistant','❌ '+(e.name==='AbortError'?'Сервер слишком долго не отвечает.':e.message));haptic('heavy')}finally{S.sending=false;updateSend();input.focus()}}
-function downloadFile(f){try{const a=document.createElement('a');a.href=`data:${f.mime};base64,${f.data}`;a.download=f.name;document.body.appendChild(a);a.click();a.remove();toast(`Файл ${f.name} готов`)}catch{toast('Не удалось скачать файл')}}
-function chatsSheet(){const rows=(S.state?.chats||[]).map(c=>`<button class="row" data-chat="${esc(c.id)}"><div class="grow"><b>${c.pinned?'📌 ':''}${esc(c.title)}</b><small>${c.requests||0} запросов</small></div><span class="arrow">${c.id===S.state?.active_chat?'✓':'›'}</span></button>`).join('');openSheet('Чаты',`${rows||'<div class="empty">Чатов пока нет</div>'}<button class="primary" id="newChatSheet">＋ Новый чат</button>`);document.querySelectorAll('[data-chat]').forEach(b=>b.onclick=async()=>{await action('/api/chat/select',{chat_id:b.dataset.chat});closeSheet()});$('newChatSheet').onclick=async()=>{await action('/api/chat/new');closeSheet()}}
-function memorySheet(){const mem=S.state?.memory||{};const rows=Object.entries(mem).map(([k,v])=>`<div class="row"><div class="grow"><b>${esc(k)}</b><small>${esc(v)}</small></div><button class="close danger" data-delmem="${esc(k)}">×</button></div>`).join('');openSheet('Память',`${rows||'<div class="empty">Память пуста</div>'}<div class="sectionTitle">Добавить</div><input class="field" id="memKey" placeholder="Название"><input class="field" id="memVal" placeholder="Значение"><button class="primary" id="memAdd">Сохранить</button><button class="secondary" id="memClear">Очистить память</button>`);document.querySelectorAll('[data-delmem]').forEach(b=>b.onclick=async()=>{await action('/api/memory',{action:'delete',key:b.dataset.delmem});memorySheet()});$('memAdd').onclick=async()=>{await action('/api/memory',{action:'set',key:$('memKey').value,value:$('memVal').value});memorySheet()};$('memClear').onclick=async()=>{await action('/api/memory',{action:'clear'});memorySheet()}}
-function favoritesSheet(){const fav=S.state?.favorites||[];const rows=fav.map(x=>`<div class="card"><div>${esc(x.text)}</div><button class="secondary danger" data-delfav="${esc(x.id)}">Удалить</button></div>`).join('');openSheet('Избранное',rows||'<div class="empty">Сохранённых ответов нет</div>');document.querySelectorAll('[data-delfav]').forEach(b=>b.onclick=async()=>{await action('/api/favorite/delete',{id:b.dataset.delfav});favoritesSheet()})}
-function statsSheet(){openSheet('Статистика',`<div class="card"><b>BulbaMaxAI ${esc(S.state?.version)}</b><br>Ваши запросы: ${S.state?.requests||0}<br>Ошибки: ${S.state?.errors||0}<br>Чатов: ${(S.state?.chats||[]).length}<br>Всего запросов: ${S.state?.stats?.total_requests||0}<br>Всего ошибок: ${S.state?.stats?.total_errors||0}</div>`)}
-function settingsSheet(){const models=(S.models||[]).map(m=>{const id=typeof m==='string'?m:m.id;return `<option value="${esc(id)}" ${S.state?.model===id?'selected':''}>${esc(id)}</option>`}).join('');openSheet('Настройки',`<div class="sectionTitle">Модель</div><select class="field" id="modelSelect"><option value="auto">🤖 Auto</option>${models}</select><div class="sectionTitle">Стиль ответа</div><select class="field" id="styleSelect"><option value="normal">Обычно</option><option value="short">Кратко</option><option value="detailed">Подробно</option></select><button class="primary" id="saveSettings">Сохранить</button><div class="sectionTitle">Доступ</div><div class="card">${esc(S.state?.license?.status||S.state?.license?.reason||'')}</div>`);$('styleSelect').value=S.state?.style||'normal';$('saveSettings').onclick=async()=>{const d=await action('/api/settings',{model:$('modelSelect').value,style:$('styleSelect').value});if(d?.ok)closeSheet()}}
-async function profileSheet(){let html=`<div class="card">${esc(S.state?.license?.status||S.state?.license?.reason||'Доступ открыт')}</div>`;if(S.state?.license?.required&&!S.state?.license?.active)html+=`<div class="sectionTitle">Активация</div><input class="field" id="licenseCode" placeholder="BULBA-XXXX-XXXX"><button class="primary" id="activate">Активировать</button>`;html+=`<div class="sectionTitle">Статистика</div><div class="card">Запросов: ${S.state?.requests||0}<br>Ошибок: ${S.state?.errors||0}<br>Чатов: ${(S.state?.chats||[]).length}</div>`;if(S.state?.is_admin)html+=`<button class="secondary" id="admin">👑 Админ-панель</button>`;openSheet('Профиль',html);if($('activate'))$('activate').onclick=async()=>{const d=await action('/api/activate',{code:$('licenseCode').value});if(d?.ok){toast('Лицензия активирована');profileSheet()}};if($('admin'))$('admin').onclick=adminSheet}
-async function adminSheet(){try{const [r,s]=await Promise.all([api('/api/admin/rules'),api('/api/admin/stats')]);const rules=r.rules||[];openSheet('Админ-панель',`<div class="card">Пользователей: ${s.stats.users}<br>Запросов: ${s.stats.requests}<br>Ошибок: ${s.stats.errors}<br>Правил: ${s.stats.rules}</div><div class="sectionTitle">Глобальное правило</div><input class="field" id="rulePattern" placeholder="Фраза"><textarea class="field" id="ruleResponse" placeholder="Ответ"></textarea><select class="field" id="ruleMode"><option value="contains">Содержит</option><option value="exact">Точное совпадение</option></select><button class="primary" id="ruleAdd">Добавить правило</button><div class="sectionTitle">Правила</div>${rules.map(x=>`<div class="row"><div class="grow"><b>${esc(x.pattern)}</b><small>${esc(x.response)}</small></div><button class="close danger" data-rule="${esc(x.id)}">×</button></div>`).join('')||'<div class="empty">Правил нет</div>'}<div class="sectionTitle">Выдать лицензию</div><input class="field" id="licUser" placeholder="USER_ID"><input class="field" id="licDays" type="number" placeholder="Дни"><input class="field" id="licReq" type="number" placeholder="Запросы, 0 = без лимита"><button class="secondary" id="licAdd">Создать и выдать</button>`);$('ruleAdd').onclick=async()=>{await action('/api/admin/rules',{action:'add',pattern:$('rulePattern').value,response:$('ruleResponse').value,mode:$('ruleMode').value});adminSheet()};document.querySelectorAll('[data-rule]').forEach(b=>b.onclick=async()=>{await action('/api/admin/rules',{action:'delete',id:b.dataset.rule});adminSheet()});$('licAdd').onclick=async()=>{const d=await action('/api/admin/license',{user_id:$('licUser').value,days:+$('licDays').value,requests:+$('licReq').value||0});if(d?.code)toast(d.code)}}catch(e){toast(e.message)}}
-async function getMediaModels(){if(Array.isArray(S.mediaModels))return S.mediaModels;const d=await api('/api/media/models');S.mediaModels=d.models||[];return S.mediaModels}
-function paramValues(item,key){const p=item?.params||{};const v=p[key];if(Array.isArray(v))return v;if(v&&typeof v==='object')return v.values||v.options||v.enum||v.choices||[];return []}
-function buildParamSelect(label,key,values,def){if(!values.length)return '';const options=values.map(v=>`<option value="${esc(v)}" ${String(v)===String(def)?'selected':''}>${esc(v)}</option>`).join('');return `<div class="sectionTitle">${esc(label)}</div><select class="field" id="media_${esc(key)}">${options}</select>`}
-async function mediaSheet(){try{const models=await getMediaModels();const groups=[['image','🖼️ Изображение'],['video','🎬 Видео'],['tts','🔊 Голос'],['music','🎵 Музыка'],['3d','🧊 3D']];const cards=groups.map(([k,t])=>`<button class="row" data-media-kind="${k}"><div class="grow"><b>${t}</b><small>${models.filter(x=>x.kind===k).length} моделей доступно</small></div><span class="arrow">›</span></button>`).join('');openSheet('Media Studio',`${cards}<div class="card"><b>Авто</b><small>Bulba выберет доступную модель автоматически.</small></div>`);document.querySelectorAll('[data-media-kind]').forEach(b=>b.onclick=()=>mediaForm(b.dataset.mediaKind,models))}catch(e){toast(e.message)}}
-function mediaForm(kind,models){const titles={image:'🖼️ Изображение',video:'🎬 Видео',tts:'🔊 Голос',music:'🎵 Музыка','3d':'🧊 3D'};const list=models.filter(x=>x.kind===kind);const opts=list.map(x=>`<option value="${esc(x.id)}">${esc(x.id)}${x.fromRub!=null?` — от ${esc(x.fromRub)} ₽`:''}</option>`).join('');const selected=()=>list.find(x=>x.id===$('mediaModel')?.value)||list[0]||null;const renderParams=()=>{const item=selected();if(!item)return '';const labels={aspect_ratio:'Соотношение',duration:'Длительность',resolution:'Разрешение',quality:'Качество',mode:'Режим',voice:'Голос'};let out='';for(const [k,label] of Object.entries(labels)){const vals=paramValues(item,k);if(!vals.length)continue;const preferred=k==='aspect_ratio'?'1:1':k==='duration'?'5':k==='resolution'?'720p':k==='quality'?'medium':vals[0];out+=buildParamSelect(label,k,vals,vals.includes(preferred)?preferred:vals[0])}return out};openSheet(titles[kind],`<textarea class="field" id="mediaPrompt" rows="5" placeholder="Опиши, что нужно создать…"></textarea><select class="field" id="mediaModel"><option value="">🤖 Auto</option>${opts}</select><div id="mediaParams">${renderParams()}</div><button class="primary" id="mediaGenerate">Создать</button><button class="secondary" id="mediaBack">← Назад</button>`);$('mediaBack').onclick=mediaSheet;$('mediaModel').onchange=()=>{$('mediaParams').innerHTML=renderParams()};$('mediaGenerate').onclick=async()=>{const prompt=$('mediaPrompt').value.trim();if(!prompt)return toast('Опиши, что нужно создать.');const opts={};document.querySelectorAll('#mediaParams select').forEach(el=>{opts[el.id.replace('media_','')]=el.value});const b=$('mediaGenerate');b.disabled=true;b.textContent='Запускаем…';try{const d=await api('/api/media/generate',{method:'POST',body:JSON.stringify({kind,prompt,model:$('mediaModel').value,opts}),timeout:35000});if(!d.job_id)throw new Error('Сервер не вернул ID задачи.');openSheet(titles[kind],`<div class="card mediaStatus"><span class="spinner"></span><div><b>Генерация запущена</b><small id="mediaProgress">Подготавливаем…</small></div></div>`);const done=await pollMediaJob(d.job_id,kind==='video'?660000:360000,j=>{const p=$('mediaProgress');if(p)p.textContent=j.status==='submitting'?'Отправляем в генератор…':'Генерация выполняется…'});openSheet(titles[kind],mediaResultHtml(done,kind));await refreshState(false)}catch(e){toast(e.message);b.disabled=false;b.textContent='Создать'}}}
-function brandMenu(){openSheet('Bulba AI',`<button class="row" id="mMedia"><div class="grow"><b>🎨 Media Studio</b><small>Изображения, видео, голос, музыка, 3D</small></div><span class="arrow">›</span></button><button class="row" id="mChats"><div class="grow"><b>💬 Чаты</b><small>История и управление</small></div><span class="arrow">›</span></button><button class="row" id="mMemory"><div class="grow"><b>💾 Память</b><small>Сохранённые данные</small></div><span class="arrow">›</span></button><button class="row" id="mStats"><div class="grow"><b>📊 Статистика</b><small>Ваши показатели</small></div><span class="arrow">›</span></button><button class="row" id="mFavorites"><div class="grow"><b>⭐ Избранное</b><small>Сохранённые ответы</small></div><span class="arrow">›</span></button><button class="row" id="mSettings"><div class="grow"><b>⚙️ Настройки</b><small>Модель и стиль</small></div><span class="arrow">›</span></button>`);$('mMedia').onclick=mediaSheet;$('mChats').onclick=chatsSheet;$('mMemory').onclick=memorySheet;$('mStats').onclick=statsSheet;$('mFavorites').onclick=favoritesSheet;$('mSettings').onclick=settingsSheet}
-function tab(name){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));if(name==='chatTab'){closeSheet();scrollBottom(false)}else if(name==='mediaTab')mediaSheet();else if(name==='chatsTab')chatsSheet();else if(name==='memoryTab')memorySheet();else settingsSheet()}
-document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>tab(b.dataset.tab));
-document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{input.value=b.dataset.q+' ';resize();input.focus()});
-$('brand').onclick=brandMenu;$('profileBtn').onclick=profileSheet;$('attach').onclick=()=>file.click();file.onchange=()=>chooseFile(file.files?.[0]);$('removeFile').onclick=clearFile;send.onclick=sendMessage;
-input.addEventListener('input',resize);input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}});
-load();resize();
+(() => {
+"use strict";
+
+const tg = window.Telegram?.WebApp || null;
+
+if(tg){
+  try{
+    tg.ready();
+    tg.expand();
+    tg.enableClosingConfirmation?.();
+  }catch(e){}
+}
+
+const $ = id => document.getElementById(id);
+
+const state = {
+  user:null,
+  chats:[],
+  messages:[],
+  models:[],
+  selectedModel:null,
+  selectedChat:null,
+  selectedFile:null,
+  mediaKind:"image",
+  mediaModels:[],
+  selectedMediaModel:null,
+  sending:false,
+  generating:false,
+  pollTimer:null,
+  lastState:null
+};
+
+const api = async (url, options={}) => {
+  const headers = new Headers(options.headers || {});
+  headers.set("Content-Type","application/json");
+
+  const init = {
+    ...options,
+    headers
+  };
+
+  if(tg?.initDataUnsafe?.user){
+    headers.set("X-Telegram-User", JSON.stringify(tg.initDataUnsafe.user));
+  }
+
+  let response;
+
+  try{
+    response = await fetch(url, init);
+  }catch(error){
+    throw new Error("Нет соединения с сервером");
+  }
+
+  let data = null;
+
+  try{
+    data = await response.json();
+  }catch(e){
+    data = null;
+  }
+
+  if(!response.ok){
+    const message = data?.message || data?.error || `Ошибка сервера (${response.status})`;
+    throw new Error(message);
+  }
+
+  return data;
+};
+
+function haptic(type="light"){
+  try{
+    tg?.HapticFeedback?.impactOccurred?.(type);
+  }catch(e){}
+}
+
+let toastTimer = null;
+
+function toast(message){
+  const el = $("toast");
+  if(!el)return;
+
+  el.textContent = message;
+  el.classList.add("show");
+
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.classList.remove("show");
+  },2600);
+}
+
+function escapeHtml(value){
+  return String(value ?? "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+}
+
+function formatMessage(text){
+  return escapeHtml(text);
+}
+
+function setLoading(button, loading, text){
+  if(!button)return;
+
+  if(loading){
+    button.dataset.oldText = button.innerHTML;
+    button.innerHTML = `<span class="inline" style="justify-content:center"><span class="spinner"></span>${escapeHtml(text || "Загрузка…")}</span>`;
+    button.disabled = true;
+  }else{
+    button.innerHTML = button.dataset.oldText || "Готово";
+    button.disabled = false;
+  }
+}
+
+function showScreen(name){
+  document.querySelectorAll(".screen").forEach(screen => {
+    screen.classList.toggle("active", screen.id === `screen-${name}`);
+  });
+
+  document.querySelectorAll(".navBtn").forEach(button => {
+    button.classList.toggle("active", button.dataset.screen === name);
+  });
+
+  if(name === "chats")loadChats();
+  if(name === "settings")loadModels();
+  if(name === "profile")loadState();
+  if(name === "media")loadMediaModels(state.mediaKind);
+
+  haptic("light");
+}
+
+function renderMessages(){
+  const container = $("messages");
+  const empty = $("emptyState");
+
+  container.innerHTML = "";
+
+  if(!state.messages.length){
+    empty.style.display = "flex";
+    return;
+  }
+
+  empty.style.display = "none";
+
+  const fragment = document.createDocumentFragment();
+
+  state.messages.forEach(message => {
+    const row = document.createElement("div");
+
+    const role = message.role === "user" ? "user" :
+                 message.role === "assistant" ? "assistant" : "system";
+
+    row.className = `message ${role}`;
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.innerHTML = formatMessage(message.content || "");
+
+    row.appendChild(bubble);
+    fragment.appendChild(row);
+  });
+
+  container.appendChild(fragment);
+
+  requestAnimationFrame(() => {
+    container.scrollTop = container.scrollHeight;
+  });
+}
+
+function addMessage(role, content){
+  state.messages.push({
+    role,
+    content
+  });
+
+  renderMessages();
+}
+
+function addTyping(){
+  const container = $("messages");
+
+  const row = document.createElement("div");
+  row.className = "message assistant";
+  row.id = "typingMessage";
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+
+  bubble.innerHTML = `
+    <div class="typing">
+      <span class="dot"></span>
+      <span class="dot"></span>
+      <span class="dot"></span>
+    </div>
+  `;
+
+  row.appendChild(bubble);
+  container.appendChild(row);
+
+  container.scrollTop = container.scrollHeight;
+}
+
+function removeTyping(){
+  $("typingMessage")?.remove();
+}
+
+function autoResizeInput(){
+  const input = $("input");
+
+  input.style.height = "auto";
+
+  const height = Math.min(
+    Math.max(input.scrollHeight,28),
+    120
+  );
+
+  input.style.height = `${height}px`;
+}
+
+function selectModel(model){
+  state.selectedModel = model;
+
+  document.querySelectorAll(".modelCard").forEach(card => {
+    card.classList.toggle(
+      "selected",
+      card.dataset.model === String(model?.id || model?.name || "")
+    );
+  });
+
+  $("currentModel").textContent =
+    model?.name ||
+    model?.id ||
+    "—";
+
+  try{
+    localStorage.setItem(
+      "bulba_selected_model",
+      model?.id || model?.name || ""
+    );
+  }catch(e){}
+
+  haptic("light");
+}
+
+async function loadModels(){
+  try{
+    const data = await api("/api/models");
+
+    state.models = Array.isArray(data?.models)
+      ? data.models
+      : Array.isArray(data)
+        ? data
+        : [];
+
+    const grid = $("modelGrid");
+    grid.innerHTML = "";
+
+    if(!state.models.length){
+      grid.innerHTML = `<div class="muted">Модели пока недоступны.</div>`;
+      return;
+    }
+
+    let saved = null;
+
+    try{
+      saved = localStorage.getItem("bulba_selected_model");
+    }catch(e){}
+
+    const fragment = document.createDocumentFragment();
+
+    state.models.forEach(model => {
+      const id = String(model.id || model.name || "");
+      const card = document.createElement("button");
+
+      card.type = "button";
+      card.className = "modelCard";
+      card.dataset.model = id;
+
+      card.innerHTML = `
+        <div class="modelName">${escapeHtml(model.name || id)}</div>
+        <div class="modelDesc">${escapeHtml(model.description || model.desc || "")}</div>
+      `;
+
+      card.addEventListener("click", () => {
+        selectModel(model);
+      });
+
+      fragment.appendChild(card);
+    });
+
+    grid.appendChild(fragment);
+
+    const chosen =
+      state.models.find(model =>
+        String(model.id || model.name || "") === saved
+      ) || state.models[0];
+
+    selectModel(chosen);
+  }catch(error){
+    $("modelGrid").innerHTML =
+      `<div class="muted">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function loadChats(){
+  try{
+    const data = await api("/api/state");
+
+    state.chats =
+      Array.isArray(data?.chats)
+        ? data.chats
+        : [];
+
+    renderChats();
+  }catch(error){
+    $("chatList").innerHTML =
+      `<div class="muted">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderChats(){
+  const container = $("chatList");
+  container.innerHTML = "";
+
+  if(!state.chats.length){
+    container.innerHTML =
+      `<div class="card"><div class="muted">Чатов пока нет.</div></div>`;
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  state.chats.forEach(chat => {
+    const button = document.createElement("button");
+
+    button.type = "button";
+    button.className =
+      `chatItem ${String(chat.id) === String(state.selectedChat) ? "active" : ""}`;
+
+    button.innerHTML = `
+      <div class="chatTitle">${escapeHtml(chat.title || "Новый чат")}</div>
+      <div class="chatMeta">${escapeHtml(chat.updated_at || chat.date || "")}</div>
+    `;
+
+    button.addEventListener("click", async () => {
+      await selectChat(chat.id);
+    });
+
+    fragment.appendChild(button);
+  });
+
+  container.appendChild(fragment);
+}
+
+async function selectChat(chatId){
+  try{
+    const data = await api("/api/chat/select",{
+      method:"POST",
+      body:JSON.stringify({
+        chat_id:chatId
+      })
+    });
+
+    state.selectedChat = chatId;
+
+    if(Array.isArray(data?.messages)){
+      state.messages = data.messages.map(item => ({
+        role:item.role,
+        content:item.content || item.text || ""
+      }));
+    }else{
+      state.messages = [];
+    }
+
+    renderMessages();
+    showScreen("chat");
+  }catch(error){
+    toast(error.message);
+  }
+}
+
+async function createNewChat(){
+  if(state.sending)return;
+
+  try{
+    const data = await api("/api/chat/new",{
+      method:"POST",
+      body:JSON.stringify({})
+    });
+
+    state.selectedChat = data?.chat_id || null;
+    state.messages = [];
+
+    renderMessages();
+    showScreen("chat");
+    toast("Новый чат создан");
+  }catch(error){
+    toast(error.message);
+  }
+}
+
+async function sendMessage(){
+  if(state.sending)return;
+
+  const input = $("input");
+  const text = input.value.trim();
+
+  if(!text && !state.selectedFile){
+    return;
+  }
+
+  state.sending = true;
+  $("sendBtn").disabled = true;
+
+  const file = state.selectedFile;
+
+  input.value = "";
+  autoResizeInput();
+
+  if(text){
+    addMessage("user",text);
+  }
+
+  if(file){
+    addMessage("user",`📎 ${file.name}`);
+  }
+
+  removeFile();
+
+  addTyping();
+
+  try{
+    let response;
+
+    if(file){
+      const form = new FormData();
+
+      form.append("message",text);
+      form.append("file",file);
+
+      if(state.selectedModel){
+        form.append(
+          "model",
+          state.selectedModel.id || state.selectedModel.name || ""
+        );
+      }
+
+      response = await fetch("/api/chat",{
+        method:"POST",
+        body:form,
+        headers:tg?.initDataUnsafe?.user
+          ? {
+              "X-Telegram-User":
+                JSON.stringify(tg.initDataUnsafe.user)
+            }
+          : {}
+      });
+
+      let data;
+
+      try{
+        data = await response.json();
+      }catch(e){
+        data = null;
+      }
+
+      if(!response.ok){
+        throw new Error(
+          data?.message ||
+          data?.error ||
+          `Ошибка сервера (${response.status})`
+        );
+      }
+
+      response = data;
+    }else{
+      response = await api("/api/chat",{
+        method:"POST",
+        body:JSON.stringify({
+          message:text,
+          model:
+            state.selectedModel?.id ||
+            state.selectedModel?.name ||
+            null,
+          chat_id:state.selectedChat
+        })
+      });
+    }
+
+    removeTyping();
+
+    const answer =
+      response?.answer ||
+      response?.response ||
+      response?.message ||
+      response?.text ||
+      "";
+
+    if(answer){
+      addMessage("assistant",answer);
+    }else{
+      addMessage("system","Ответ получен, но текст отсутствует.");
+    }
+
+    if(response?.chat_id){
+      state.selectedChat = response.chat_id;
+    }
+
+    haptic("light");
+  }catch(error){
+    removeTyping();
+    addMessage("system",`Ошибка: ${error.message}`);
+    toast(error.message);
+    haptic("heavy");
+  }finally{
+    state.sending = false;
+    $("sendBtn").disabled = false;
+    input.focus();
+  }
+}
+
+function removeFile(){
+  state.selectedFile = null;
+  $("fileInput").value = "";
+  $("filePreview").classList.remove("show");
+  $("filePreviewName").textContent = "";
+}
+
+function openSheet(title="Media Studio"){
+  $("sheetTitle").textContent = title;
+  $("sheetBackdrop").classList.add("show");
+  document.body.style.overflow = "hidden";
+}
+
+function closeSheet(){
+  $("sheetBackdrop").classList.remove("show");
+  document.body.style.overflow = "";
+}
+
+async function loadMediaModels(kind){
+  try{
+    const data = await api(
+      `/api/media/models?kind=${encodeURIComponent(kind)}`
+    );
+
+    state.mediaModels =
+      Array.isArray(data?.models)
+        ? data.models
+        : Array.isArray(data)
+          ? data
+          : [];
+
+    renderMediaModels();
+
+    if(state.mediaModels.length){
+      const first = state.mediaModels[0];
+
+      state.selectedMediaModel =
+        state.mediaModels.find(model =>
+          model.id === state.selectedMediaModel?.id
+        ) || first;
+    }
+  }catch(error){
+    $("mediaModels").innerHTML =
+      `<div class="muted">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderMediaModels(){
+  const container = $("mediaModels");
+
+  container.innerHTML = "";
+
+  if(!state.mediaModels.length){
+    container.innerHTML =
+      `<div class="muted">Модели этого типа сейчас недоступны.</div>`;
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  state.mediaModels.forEach(model => {
+    const id = String(model.id || model.name || "");
+
+    const button = document.createElement("button");
+
+    button.type = "button";
+    button.className =
+      `mediaModel ${
+        String(state.selectedMediaModel?.id || "") === id
+          ? "selected"
+          : ""
+      }`;
+
+    button.dataset.model = id;
+
+    button.innerHTML = `
+      <div class="modelName">${escapeHtml(model.name || id)}</div>
+      <div class="modelDesc">${escapeHtml(model.description || model.desc || "")}</div>
+    `;
+
+    button.addEventListener("click",() => {
+      state.selectedMediaModel = model;
+      renderMediaModels();
+    });
+
+    fragment.appendChild(button);
+  });
+
+  container.appendChild(fragment);
+}
+
+function renderMediaExtraFields(){
+  const container = $("mediaExtraFields");
+  container.innerHTML = "";
+
+  if(state.mediaKind === "video"){
+    container.innerHTML = `
+      <div>
+        <div class="fieldLabel">Длительность</div>
+        <select class="field" id="mediaDuration">
+          <option value="5">5 секунд</option>
+          <option value="10">10 секунд</option>
+        </select>
+      </div>
+    `;
+  }
+
+  if(state.mediaKind === "tts"){
+    container.innerHTML = `
+      <div>
+        <div class="fieldLabel">Голос</div>
+        <select class="field" id="mediaVoice">
+          <option value="default">Стандартный</option>
+        </select>
+      </div>
+    `;
+  }
+
+  if(state.mediaKind === "music"){
+    container.innerHTML = `
+      <div>
+        <div class="fieldLabel">Длительность</div>
+        <select class="field" id="musicDuration">
+          <option value="30">30 секунд</option>
+          <option value="60">60 секунд</option>
+          <option value="120">120 секунд</option>
+        </select>
+      </div>
+    `;
+  }
+
+  if(state.mediaKind === "3d"){
+    container.innerHTML = `
+      <div class="muted">
+        3D-генерация доступна только для моделей, которые поддерживают этот режим.
+      </div>
+    `;
+  }
+}
+
+function selectMediaKind(kind){
+  state.mediaKind = kind;
+  state.selectedMediaModel = null;
+
+  document.querySelectorAll(".mediaTab").forEach(button => {
+    button.classList.toggle(
+      "active",
+      button.dataset.kind === kind
+    );
+  });
+
+  renderMediaExtraFields();
+  loadMediaModels(kind);
+}
+
+async function generateMedia(){
+  if(state.generating)return;
+
+  const prompt = $("mediaPrompt").value.trim();
+
+  if(!prompt){
+    toast("Напиши промпт");
+    return;
+  }
+
+  if(!state.selectedMediaModel){
+    toast("Выбери модель");
+    return;
+  }
+
+  state.generating = true;
+
+  const button = $("generateMediaBtn");
+  setLoading(button,true,"Создание…");
+
+  const status = $("mediaStatus");
+  const result = $("mediaResult");
+
+  status.classList.add("show");
+  status.textContent = "Создаём задачу…";
+  result.innerHTML = "";
+
+  try{
+    const payload = {
+      kind:state.mediaKind,
+      model:
+        state.selectedMediaModel.id ||
+        state.selectedMediaModel.name,
+      prompt
+    };
+
+    const duration =
+      $("mediaDuration")?.value ||
+      $("musicDuration")?.value;
+
+    if(duration){
+      payload.duration = Number(duration);
+    }
+
+    const voice = $("mediaVoice")?.value;
+
+    if(voice){
+      payload.voice = voice;
+    }
+
+    const data = await api("/api/media/generate",{
+      method:"POST",
+      body:JSON.stringify(payload)
+    });
+
+    const jobId =
+      data?.job_id ||
+      data?.jobId ||
+      data?.id;
+
+    if(!jobId){
+      throw new Error("Сервер не вернул ID задачи");
+    }
+
+    status.textContent = "Задача создана. Ожидаем результат…";
+
+    await pollMediaJob(jobId);
+  }catch(error){
+    status.textContent = `Ошибка: ${error.message}`;
+    toast(error.message);
+  }finally{
+    state.generating = false;
+    setLoading(button,false);
+  }
+}
+
+async function pollMediaJob(jobId){
+  const status = $("mediaStatus");
+  const result = $("mediaResult");
+
+  let attempts = 0;
+
+  while(attempts < 120){
+    attempts++;
+
+    const data = await api(
+      `/api/media/jobs/${encodeURIComponent(jobId)}`
+    );
+
+    const job =
+      data?.job ||
+      data;
+
+    const jobStatus =
+      String(job?.status || "").toLowerCase();
+
+    if(
+      jobStatus === "completed" ||
+      jobStatus === "success" ||
+      jobStatus === "done"
+    ){
+      status.textContent = "Готово";
+
+      const url =
+        job?.url ||
+        job?.result_url ||
+        job?.resultUrl ||
+        job?.output_url ||
+        job?.outputUrl;
+
+      if(url){
+        result.innerHTML = `
+          <div class="result">
+            <div class="label">Результат</div>
+            <div style="margin-top:7px">
+              <a href="${escapeHtml(url)}" target="_blank" rel="noopener">
+                Открыть результат
+              </a>
+            </div>
+          </div>
+        `;
+      }else{
+        result.innerHTML = `
+          <div class="result">
+            <div class="label">Готово</div>
+            <div class="muted" style="margin-top:5px">
+              Результат создан, но сервер не вернул публичную ссылку.
+            </div>
+          </div>
+        `;
+      }
+
+      haptic("success");
+      return;
+    }
+
+    if(
+      jobStatus === "failed" ||
+      jobStatus === "error" ||
+      jobStatus === "cancelled"
+    ){
+      throw new Error(
+        job?.error ||
+        job?.message ||
+        "Генерация завершилась с ошибкой"
+      );
+    }
+
+    const progress =
+      job?.progress ??
+      job?.percent;
+
+    status.textContent =
+      progress != null
+        ? `Создание… ${progress}%`
+        : "Создание…";
+
+    await new Promise(resolve => setTimeout(resolve,1500));
+  }
+
+  throw new Error("Превышено время ожидания результата");
+}
+
+async function loadState(){
+  try{
+    const data = await api("/api/state");
+
+    state.lastState = data;
+
+    const user = data?.user || data?.profile || null;
+
+    if(user){
+      state.user = user;
+
+      const name =
+        user.first_name ||
+        user.name ||
+        user.username ||
+        "Пользователь";
+
+      $("profileName").textContent = name;
+
+      $("profileId").textContent =
+        `ID: ${user.id ?? "—"}`;
+
+      $("profileAvatar").textContent =
+        String(name).trim().charAt(0).toUpperCase() || "B";
+    }
+
+    $("statRequests").textContent =
+      data?.stats?.requests ??
+      data?.requests ??
+      "0";
+
+    $("statFavorites").textContent =
+      data?.stats?.favorites ??
+      data?.favorites ??
+      "0";
+
+    $("statChats").textContent =
+      data?.stats?.chats ??
+      data?.chats_count ??
+      state.chats.length ??
+      "0";
+
+    $("statLicense").textContent =
+      data?.license?.active
+        ? "Активна"
+        : data?.license
+          ? "Есть"
+          : "—";
+
+    $("headerSub").textContent =
+      `V17.2 • ${data?.online === false ? "offline" : "онлайн"}`;
+
+    if(data?.is_admin){
+      $("adminCard").classList.remove("hidden");
+    }
+  }catch(error){
+    $("headerSub").textContent = "V17.2";
+  }
+}
+
+async function loadMemory(){
+  try{
+    const data = await api("/api/memory");
+
+    $("memoryText").value =
+      data?.memory ||
+      data?.text ||
+      "";
+  }catch(error){
+    toast(error.message);
+  }
+}
+
+async function saveMemory(){
+  const text = $("memoryText").value;
+
+  try{
+    await api("/api/memory",{
+      method:"POST",
+      body:JSON.stringify({
+        memory:text
+      })
+    });
+
+    toast("Память сохранена");
+    closeSheet();
+  }catch(error){
+    toast(error.message);
+  }
+}
+
+async function activateLicense(){
+  const input = $("licenseInput");
+  const code = input.value.trim();
+
+  if(!code){
+    toast("Введи код");
+    return;
+  }
+
+  const button = $("activateBtn");
+
+  setLoading(button,true,"Активация…");
+
+  try{
+    const data = await api("/api/activate",{
+      method:"POST",
+      body:JSON.stringify({
+        code
+      })
+    });
+
+    toast(
+      data?.message ||
+      "Лицензия активирована"
+    );
+
+    input.value = "";
+    await loadState();
+  }catch(error){
+    toast(error.message);
+  }finally{
+    setLoading(button,false);
+  }
+}
+
+async function openMemory(){
+  $("mediaStudio").classList.add("hidden");
+  $("adminStudio").classList.add("hidden");
+  $("memoryStudio").classList.remove("hidden");
+
+  openSheet("Память");
+  await loadMemory();
+}
+
+function openMedia(){
+  $("memoryStudio").classList.add("hidden");
+  $("adminStudio").classList.add("hidden");
+  $("mediaStudio").classList.remove("hidden");
+
+  openSheet("Media Studio");
+
+  selectMediaKind(state.mediaKind);
+}
+
+async function adminRequest(url, method="GET", body=null){
+  const options = {
+    method
+  };
+
+  if(body){
+    options.body = JSON.stringify(body);
+  }
+
+  return api(url,options);
+}
+
+async function openAdmin(type){
+  $("mediaStudio").classList.add("hidden");
+  $("memoryStudio").classList.add("hidden");
+  $("adminStudio").classList.remove("hidden");
+
+  openSheet("Админ-панель");
+
+  const container = $("adminStudio");
+
+  container.innerHTML =
+    `<div class="card"><div class="muted">Загрузка…</div></div>`;
+
+  try{
+    let data;
+
+    if(type === "rules"){
+      data = await adminRequest("/api/admin/rules");
+    }
+
+    if(type === "stats"){
+      data = await adminRequest("/api/admin/stats");
+    }
+
+    if(type === "license"){
+      data = await adminRequest("/api/admin/license");
+    }
+
+    container.innerHTML = `
+      <div class="card">
+        <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:11px;color:#d8deea">${escapeHtml(JSON.stringify(data,null,2))}</pre>
+      </div>
+    `;
+  }catch(error){
+    container.innerHTML =
+      `<div class="card"><div class="muted">${escapeHtml(error.message)}</div></div>`;
+  }
+}
+
+async function clearCurrentChat(){
+  if(state.sending)return;
+
+  state.messages = [];
+  renderMessages();
+
+  toast("Локальный чат очищен");
+}
+
+function updateViewport(){
+  const vv = window.visualViewport;
+
+  if(!vv){
+    document.documentElement.style.setProperty(
+      "--vvh",
+      `${window.innerHeight}px`
+    );
+    return;
+  }
+
+  document.documentElement.style.setProperty(
+    "--vvh",
+    `${vv.height}px`
+  );
+}
+
+function setupEvents(){
+  document.querySelectorAll(".navBtn").forEach(button => {
+    button.addEventListener("click",() => {
+      showScreen(button.dataset.screen);
+    });
+  });
+
+  $("newChatBtn").addEventListener(
+    "click",
+    createNewChat
+  );
+
+  $("sendBtn").addEventListener(
+    "click",
+    sendMessage
+  );
+
+  $("input").addEventListener(
+    "input",
+    autoResizeInput
+  );
+
+  $("input").addEventListener(
+    "keydown",
+    event => {
+      if(
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.isComposing
+      ){
+        event.preventDefault();
+        sendMessage();
+      }
+    }
+  );
+
+  $("attachBtn").addEventListener(
+    "click",
+    () => $("fileInput").click()
+  );
+
+  $("fileInput").addEventListener(
+    "change",
+    event => {
+      const file = event.target.files?.[0];
+
+      if(!file){
+        return;
+      }
+
+      state.selectedFile = file;
+
+      $("filePreviewName").textContent =
+        `${file.name} • ${Math.round(file.size / 1024)} КБ`;
+
+      $("filePreview").classList.add("show");
+
+      haptic("light");
+    }
+  );
+
+  $("removeFileBtn").addEventListener(
+    "click",
+    removeFile
+  );
+
+  document.querySelectorAll(".suggestion").forEach(button => {
+    button.addEventListener("click",() => {
+      $("input").value = button.dataset.prompt || "";
+      autoResizeInput();
+      $("input").focus();
+    });
+  });
+
+  $("openMediaBtn").addEventListener(
+    "click",
+    openMedia
+  );
+
+  $("generateMediaBtn").addEventListener(
+    "click",
+    generateMedia
+  );
+
+  document.querySelectorAll(".mediaTab").forEach(button => {
+    button.addEventListener("click",() => {
+      selectMediaKind(button.dataset.kind);
+    });
+  });
+
+  $("memoryBtn").addEventListener(
+    "click",
+    openMemory
+  );
+
+  $("saveMemoryBtn").addEventListener(
+    "click",
+    saveMemory
+  );
+
+  $("activateBtn").addEventListener(
+    "click",
+    activateLicense
+  );
+
+  $("clearChatBtn").addEventListener(
+    "click",
+    clearCurrentChat
+  );
+
+  $("adminRulesBtn").addEventListener(
+    "click",
+    () => openAdmin("rules")
+  );
+
+  $("adminStatsBtn").addEventListener(
+    "click",
+    () => openAdmin("stats")
+  );
+
+  $("adminLicenseBtn").addEventListener(
+    "click",
+    () => openAdmin("license")
+  );
+
+  $("sheetBackdrop").addEventListener(
+    "click",
+    event => {
+      if(event.target === $("sheetBackdrop")){
+        closeSheet();
+      }
+    }
+  );
+}
+
+async function load(){
+  updateViewport();
+  setupEvents();
+
+  autoResizeInput();
+
+  await Promise.allSettled([
+    loadState(),
+    loadModels()
+  ]);
+
+  try{
+    const data = await api("/api/state");
+
+    if(Array.isArray(data?.messages)){
+      state.messages = data.messages.map(message => ({
+        role:message.role,
+        content:message.content || message.text || ""
+      }));
+
+      renderMessages();
+    }
+
+    if(data?.chat_id){
+      state.selectedChat = data.chat_id;
+    }
+  }catch(error){}
+
+  if(tg?.initDataUnsafe?.user){
+    const user = tg.initDataUnsafe.user;
+
+    state.user = user;
+
+    const name =
+      user.first_name ||
+      user.username ||
+      "Пользователь";
+
+    $("profileName").textContent = name;
+
+    $("profileId").textContent =
+      `ID: ${user.id ?? "—"}`;
+
+    $("profileAvatar").textContent =
+      String(name).charAt(0).toUpperCase();
+  }
+}
+
+window.addEventListener(
+  "resize",
+  updateViewport,
+  {passive:true}
+);
+
+window.visualViewport?.addEventListener(
+  "resize",
+  updateViewport,
+  {passive:true}
+);
+
+window.visualViewport?.addEventListener(
+  "scroll",
+  updateViewport,
+  {passive:true}
+);
+
+document.addEventListener(
+  "visibilitychange",
+  () => {
+    if(document.visibilityState === "visible"){
+      updateViewport();
+    }
+  }
+);
+
+window.addEventListener(
+  "error",
+  event => {
+    console.error(
+      "Bulba Mini App error:",
+      event.error || event.message
+    );
+  }
+);
+
+window.addEventListener(
+  "unhandledrejection",
+  event => {
+    console.error(
+      "Bulba Mini App rejection:",
+      event.reason
+    );
+  }
+);
+
+load();
 })();
 </script>
 </body>
