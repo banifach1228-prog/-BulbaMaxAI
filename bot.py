@@ -25,16 +25,15 @@ from licenses import (
 )
 
 import requests
-from media_service import create_job as create_media_job, job_status as media_job_status, get_catalog as get_media_catalog, models_for_kind as media_models_for_kind
 
-BOT_VERSION = "V17"
+BOT_VERSION = "V16"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_KEY = os.getenv("API_KEY", "").strip()
 
 BASE_URL = "https://api.baza-ai.org/v1"
 TG_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-DATA_FILE = "v17_memory.json"
-LEGACY_DATA_FILES = ("v16_memory.json", "v15_memory.json", "v14_memory.json")
+DATA_FILE = "v16_memory.json"
+LEGACY_DATA_FILES = ("v15_memory.json", "v14_memory.json")
 
 MAX_HISTORY = 24
 MAX_CHATS = 30
@@ -67,18 +66,6 @@ api_session.headers.update({
 
 db = {"users": {}, "total_requests": 0, "total_errors": 0, "rules": [], "version": BOT_VERSION}
 DB_LOCK = threading.RLock()
-USER_LOCKS = {}
-USER_LOCKS_GUARD = threading.Lock()
-
-
-def get_user_lock(uid):
-    uid = str(uid)
-    with USER_LOCKS_GUARD:
-        lock = USER_LOCKS.get(uid)
-        if lock is None:
-            lock = threading.RLock()
-            USER_LOCKS[uid] = lock
-        return lock
 
 
 def load_db():
@@ -167,7 +154,6 @@ def default_user():
         "rate": [],
         "pinned_chats": [],
         "favorites": [],
-        "media_mode": None,
     }
 
 
@@ -189,7 +175,6 @@ def get_user(uid):
     u.setdefault("rate", [])
     u.setdefault("pinned_chats", [])
     u.setdefault("favorites", [])
-    u.setdefault("media_mode", None)
     if not u["chats"]:
         u["chats"]["main"] = default_chat()
         u["active_chat"] = "main"
@@ -278,9 +263,6 @@ def main_keyboard():
     return {
         "keyboard": [
             [{"text": "🤖 Авто"}, {"text": "🧠 Модель"}],
-            [{"text": "🖼️ Фото"}, {"text": "🎬 Видео"}],
-            [{"text": "🔊 Голос"}, {"text": "🎵 Музыка"}],
-            [{"text": "🧊 3D"}, {"text": "📊 Статистика"}],
             [{"text": "📊 Статистика"}, {"text": "💾 Память"}],
             [{"text": "💬 Чаты"}, {"text": "🆕 Новый чат"}],
             [{"text": "🧹 Очистить"}, {"text": "⚙️ Настройки"}],
@@ -845,68 +827,7 @@ def consume_license_after_success(user_id):
     return ok
 
 
-def detect_media_intent(text):
-    t = str(text or "").casefold()
-    groups = {
-        "image": ("сгенерируй фото", "сделай фото", "создай изображение", "сгенерируй изображение", "нарисуй", "генерируй картинку", "создай картинку"),
-        "video": ("сгенерируй видео", "сделай видео", "создай видео", "генерируй ролик", "создай ролик"),
-        "tts": ("озвучь", "синтезируй голос", "сделай озвучку", "сгенерируй голос"),
-        "music": ("сгенерируй музыку", "создай музыку", "сделай музыку", "музыка по описанию"),
-        "3d": ("сделай 3d", "создай 3d", "3d модель", "сгенерируй 3d"),
-    }
-    for kind, phrases in groups.items():
-        if any(x in t for x in phrases):
-            return kind
-    return None
-
-def submit_media_telegram(chat_id, u, user_id, kind, prompt, model=None, opts=None):
-    if not allowed_request(u):
-        send_message(chat_id, "⏳ Слишком много запросов. Подожди несколько секунд.", main_keyboard())
-        return
-    try:
-        job_id, selected = create_media_job(kind, prompt, model=model, opts=opts or {}, user_id=user_id)
-    except Exception as e:
-        send_message(chat_id, f"❌ Не удалось запустить генерацию: {e}", main_keyboard())
-        return
-    send_message(chat_id, f"⏳ Запустил {kind}.\nМодель: {selected['id']}\nID: <code>{job_id[:12]}</code>\n\nГенерация идёт в фоне — Telegram не зависнет.")
-    def waiter():
-        while True:
-            item = media_job_status(job_id)
-            if not item:
-                return
-            if item.get("status") == "success":
-                with get_user_lock(user_id):
-                    if not consume_license_after_success(user_id):
-                        send_message(chat_id, "❌ Генерация готова, но лицензия больше не позволяет засчитать запрос.", main_keyboard())
-                        return
-                    u["requests"] += 1; db["total_requests"] += 1; get_chat(u)["requests"] += 1
-                    add_history(u, "user", prompt)
-                    add_history(u, "assistant", f"Медиа готово: {kind}")
-                    get_chat(u)["last_request"] = {"kind": kind, "ts": int(time.time())}
-                    save_db()
-                for url in item.get("urls", []):
-                    if kind == "image": send_photo_url(chat_id, url)
-                    elif kind == "video": send_video_url(chat_id, url)
-                    elif kind in ("tts", "music"): send_audio_url(chat_id, url)
-                    else: send_message(chat_id, f"🧊 3D готово:\n{url}", main_keyboard())
-                return
-            if item.get("status") == "failed":
-                u["errors"] += 1; db["total_errors"] += 1; save_db()
-                send_message(chat_id, f"❌ Медиа-генерация не удалась: {item.get('error','неизвестная ошибка')}", main_keyboard())
-                return
-            time.sleep(2.5)
-    threading.Thread(target=waiter, name=f"media-result-{job_id[:8]}", daemon=True).start()
-
-def send_photo_url(chat_id, url):
-    tg("sendPhoto", {"chat_id": chat_id, "photo": url}, timeout=60)
-
-def send_video_url(chat_id, url):
-    tg("sendVideo", {"chat_id": chat_id, "video": url, "supports_streaming": True}, timeout=60)
-
-def send_audio_url(chat_id, url):
-    tg("sendAudio", {"chat_id": chat_id, "audio": url}, timeout=60)
-
-def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None):
+def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None):
     if not allowed_request(u):
         send_message(chat_id, "⏳ Слишком много запросов. Подожди несколько секунд.", main_keyboard())
         return
@@ -918,7 +839,10 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
         status = "📎 Читаю и анализирую файл…"
     status_msg = send_message(chat_id, status)
 
+    u["requests"] += 1
+    db["total_requests"] += 1
     chat = get_chat(u)
+    chat["requests"] += 1
 
     try:
         # Fast deterministic calculator path.
@@ -932,12 +856,8 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             chat["last_prompt"] = text
             chat["last_request"] = {"kind": "text", "text": text}
             save_db()
-            if not consume_license_after_success(user_id or chat_id):
+            if not consume_license_after_success(chat_id):
                 raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
-            u["requests"] += 1
-            db["total_requests"] += 1
-            chat["requests"] += 1
-            save_db()
             if status_msg:
                 edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
             else:
@@ -997,12 +917,8 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
                     chat["last_prompt"] = text
                     chat["last_request"] = {"kind": "text", "text": text}
                     save_db()
-                    if not consume_license_after_success(user_id or chat_id):
+                    if not consume_license_after_success(chat_id):
                         raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
-                    u["requests"] += 1
-                    db["total_requests"] += 1
-                    chat["requests"] += 1
-                    save_db()
                     return
 
             if action in ("create_pdf", "create_docx"):
@@ -1034,12 +950,8 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
                 chat["last_prompt"] = text
                 chat["last_request"] = {"kind": "text", "text": text}
                 save_db()
-                if not consume_license_after_success(user_id or chat_id):
+                if not consume_license_after_success(chat_id):
                     raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
-                u["requests"] += 1
-                db["total_requests"] += 1
-                chat["requests"] += 1
-                save_db()
                 return
 
         if image:
@@ -1080,13 +992,8 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             "file_name": file_name,
         }
         save_db()
-        if not consume_license_after_success(user_id or chat_id):
+        if not consume_license_after_success(chat_id):
             raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
-
-        u["requests"] += 1
-        db["total_requests"] += 1
-        chat["requests"] += 1
-        save_db()
 
         if status_msg:
             edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
@@ -1154,7 +1061,7 @@ def new_chat(u):
     return name
 
 
-def _process_message(msg):
+def process_message(msg):
     if "chat" not in msg:
         return
     chat_id = msg["chat"]["id"]
@@ -1388,12 +1295,6 @@ def _process_message(msg):
     if text == "🧠 Модель":
         send_message(chat_id, "🧠 Выбери модель:", model_keyboard(u))
         return
-    if text in ("🖼️ Фото", "🎬 Видео", "🔊 Голос", "🎵 Музыка", "🧊 3D"):
-        kind = {"🖼️ Фото":"image", "🎬 Видео":"video", "🔊 Голос":"tts", "🎵 Музыка":"music", "🧊 3D":"3d"}[text]
-        u["media_mode"] = kind
-        save_db()
-        send_message(chat_id, f"✍️ Режим {kind} включён. Теперь отправь описание — Bulba запустит генерацию.", main_keyboard())
-        return
     if text == "📊 Статистика":
         show_stats(chat_id, u)
         return
@@ -1431,7 +1332,6 @@ def _process_message(msg):
                 caption or "Что изображено на этом фото? Проанализируй изображение.",
                 image={"data": data, "mime": "image/jpeg"},
                 media_ref={"file_id": photo["file_id"]},
-                user_id=user_id,
             )
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось обработать изображение: {e}", main_keyboard())
@@ -1449,31 +1349,16 @@ def _process_message(msg):
                 file_text=file_text,
                 file_name=doc.get("file_name", "file.txt"),
                 media_ref={"file_id": doc["file_id"]},
-                user_id=user_id,
             )
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось обработать файл: {e}", main_keyboard())
         return
 
     if text:
-        media_kind = detect_media_intent(text)
-        for command, kind in (("/image", "image"), ("/video", "video"), ("/tts", "tts"), ("/music", "music"), ("/3d", "3d")):
-            if text == command or text.startswith(command + " "):
-                media_kind, text = kind, text[len(command):].strip()
-                break
-        if not media_kind and u.get("media_mode"):
-            media_kind = u.get("media_mode")
-            u["media_mode"] = None
-        if media_kind:
-            if not text:
-                send_message(chat_id, "✍️ Напиши описание для генерации.", main_keyboard())
-            else:
-                submit_media_telegram(chat_id, u, user_id, media_kind, text)
-        else:
-            handle_ai_request(chat_id, u, text, user_id=user_id)
+        handle_ai_request(chat_id, u, text)
 
 
-def _process_callback(q):
+def process_callback(q):
     data = q.get("data", "")
     msg = q.get("message") or {}
     chat_id = msg.get("chat", {}).get("id")
@@ -1558,7 +1443,6 @@ def _process_callback(q):
                     last.get("text", ""),
                     image={"data": data_bytes, "mime": "image/jpeg"},
                     media_ref={"file_id": last["file_id"]},
-                    user_id=user_id,
                 )
             elif kind == "file" and last.get("file_id"):
                 data_bytes = tg_file(last["file_id"])
@@ -1571,25 +1455,12 @@ def _process_callback(q):
                     file_text=file_text,
                     file_name=name,
                     media_ref={"file_id": last["file_id"]},
-                    user_id=user_id,
                 )
             else:
-                handle_ai_request(chat_id, u, last.get("text", ""), user_id=user_id)
+                handle_ai_request(chat_id, u, last.get("text", ""))
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось повторить запрос: {e}", main_keyboard())
         return
-
-
-def process_message(msg):
-    user_id = msg.get("from", {}).get("id", msg.get("chat", {}).get("id"))
-    with get_user_lock(user_id):
-        return _process_message(msg)
-
-
-def process_callback(q):
-    user_id = q.get("from", {}).get("id", (q.get("message") or {}).get("chat", {}).get("id"))
-    with get_user_lock(user_id):
-        return _process_callback(q)
 
 
 def main():
