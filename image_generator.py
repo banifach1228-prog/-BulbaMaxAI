@@ -10,58 +10,74 @@ IMAGE_MODEL = "gpt-image-1-5"
 POLL_INTERVAL = 3
 POLL_TIMEOUT = 90
 
-IMAGE_MAX_BYTES = 10 * 1024 * 1024
+# Telegram sendPhoto: 10 MB
+PHOTO_MAX_BYTES = 10 * 1024 * 1024
+
+# Telegram sendDocument: 50 MB
+DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
 
 _PENDING = set()
 _PENDING_LOCK = threading.Lock()
 
 
 def install(bot):
-    """Подключает тестовую генерацию изображений только к Telegram-боту."""
+    """Подключает генерацию изображений только к Telegram-боту."""
 
     original_keyboard = bot.main_keyboard
     original_process_message = bot.process_message
 
     def image_keyboard():
         keyboard = original_keyboard()
-        rows = list(keyboard.get("keyboard", []))
+        rows = list(
+            keyboard.get("keyboard", [])
+        )
 
-        if not any(
+        exists = any(
             any(
-                button.get("text") == "🖼️ Изображение"
+                button.get("text")
+                == "🖼️ Изображение"
                 for button in row
             )
             for row in rows
-        ):
-            rows.append([
-                {"text": "🖼️ Изображение"}
-            ])
+        )
+
+        if not exists:
+            rows.append(
+                [
+                    {
+                        "text": "🖼️ Изображение"
+                    }
+                ]
+            )
 
         keyboard["keyboard"] = rows
+
         return keyboard
 
     bot.main_keyboard = image_keyboard
 
     def wrapped_process_message(msg):
+
         if "chat" not in msg:
             return original_process_message(msg)
 
-        user_id = msg.get(
-            "from",
-            {}
-        ).get(
-            "id",
-            msg["chat"]["id"]
+        chat_id = msg["chat"]["id"]
+
+        user_id = (
+            msg.get("from", {})
+            .get(
+                "id",
+                chat_id,
+            )
         )
 
         text = (
             msg.get("text") or ""
         ).strip()
 
-        chat_id = msg["chat"]["id"]
-
         with bot.get_user_lock(user_id):
 
+            # Кнопка генерации
             if text == "🖼️ Изображение":
 
                 with _PENDING_LOCK:
@@ -72,18 +88,26 @@ def install(bot):
                 bot.send_message(
                     chat_id,
                     "🖼️ Генерация изображения\n\n"
-                    "Отправь одним сообщением описание картинки.\n\n"
-                    "Или используй: /image описание",
+                    "Отправь описание картинки одним сообщением.\n\n"
+                    "Например:\n"
+                    "Космический город на Марсе ночью, "
+                    "кинематографичный свет, высокая детализация\n\n"
+                    "Или сразу используй:\n"
+                    "/image описание",
                     image_keyboard(),
                 )
 
                 return
 
+            # /image текст
             if text.startswith("/image"):
 
-                prompt = text[
-                    len("/image"):
-                ].strip()
+                prompt = (
+                    text[
+                        len("/image"):
+                    ]
+                    .strip()
+                )
 
                 if not prompt:
 
@@ -94,7 +118,7 @@ def install(bot):
 
                     bot.send_message(
                         chat_id,
-                        "🖼️ Напиши описание после /image.",
+                        "🖼️ Напиши описание после команды /image.",
                         image_keyboard(),
                     )
 
@@ -114,6 +138,7 @@ def install(bot):
 
                 return
 
+            # Следующее сообщение после кнопки
             with _PENDING_LOCK:
                 pending = (
                     str(user_id)
@@ -145,7 +170,7 @@ def install(bot):
     bot.process_message = wrapped_process_message
 
     print(
-        "Image Generator: Telegram test mode installed"
+        "🖼️ Image Generator: Telegram test mode installed"
     )
 
 
@@ -161,23 +186,32 @@ def generate_image(
     ).strip()
 
     if not api_key:
+
         bot.send_message(
             chat_id,
-            "❌ PLUSVIBE_API_KEY не настроен на сервере.",
+            "❌ PLUSVIBE_API_KEY не настроен.",
             bot.main_keyboard(),
         )
+
         return
 
-    u = bot.get_user(user_id)
+    u = bot.get_user(
+        user_id
+    )
 
+    # Защита от слишком частых запросов
     if not bot.allowed_request(u):
+
         bot.send_message(
             chat_id,
-            "⏳ Слишком много запросов. Подожди несколько секунд.",
+            "⏳ Слишком много запросов. "
+            "Подожди несколько секунд.",
             bot.main_keyboard(),
         )
+
         return
 
+    # Проверка лицензии
     if (
         os.getenv(
             "LICENSE_REQUIRED",
@@ -185,27 +219,36 @@ def generate_image(
         ).strip() == "1"
         and not bot.is_admin(user_id)
     ):
-        allowed, reason = bot.user_has_access(
-            user_id
+
+        allowed, reason = (
+            bot.user_has_access(
+                user_id
+            )
         )
 
         if not allowed:
+
             bot.send_message(
                 chat_id,
                 reason
-                + "\n\n🔑 Активируй доступ командой /activate КОД.",
+                + "\n\n"
+                "🔑 Активируй доступ командой "
+                "/activate КОД.",
                 bot.main_keyboard(),
             )
+
             return
 
     prompt = prompt.strip()[:8000]
 
     if not prompt:
+
         bot.send_message(
             chat_id,
             "❌ Описание изображения пустое.",
             bot.main_keyboard(),
         )
+
         return
 
     status = bot.send_message(
@@ -213,28 +256,40 @@ def generate_image(
         "🖼️ Создаю изображение…\n\n"
         "Модель: GPT Image 1.5\n"
         "Качество: Medium\n"
-        "Формат: 1:1",
+        "Формат: 1:1\n\n"
+        "⏳ Обычно это занимает некоторое время.",
     )
 
     try:
 
+        # -------------------------------------------------
+        # 1. Создаём задачу PlusVibe
+        # -------------------------------------------------
+
         response = requests.post(
             f"{PLUSVIBE_URL}/api/media/generate",
             headers={
-                "Authorization": (
-                    f"Bearer {api_key}"
-                ),
-                "Content-Type": (
-                    "application/json"
-                ),
+                "Authorization":
+                    f"Bearer {api_key}",
+                "Content-Type":
+                    "application/json",
             },
             json={
-                "model": IMAGE_MODEL,
-                "prompt": prompt,
+                "model":
+                    IMAGE_MODEL,
+
+                "prompt":
+                    prompt,
+
                 "opts": {
-                    "mode": "text-to-image",
-                    "aspect_ratio": "1:1",
-                    "quality": "medium",
+                    "mode":
+                        "text-to-image",
+
+                    "aspect_ratio":
+                        "1:1",
+
+                    "quality":
+                        "medium",
                 },
             },
             timeout=30,
@@ -256,38 +311,92 @@ def generate_image(
                 "PlusVibe не вернул jobId."
             )
 
+        print(
+            f"Image job created: {job_id}"
+        )
+
+        # -------------------------------------------------
+        # 2. Ждём результат
+        # -------------------------------------------------
+
         result = poll_job(
             api_key,
             job_id,
         )
 
+        print(
+            "Image job result:",
+            {
+                "status":
+                    result.get("status"),
+                "urls":
+                    len(
+                        result.get(
+                            "resultUrls",
+                            [],
+                        )
+                    ),
+            },
+        )
+
         urls = (
-            result.get("resultUrls")
+            result.get(
+                "resultUrls"
+            )
             or []
         )
 
         if not urls:
             raise RuntimeError(
-                "PlusVibe завершил задачу без изображения."
+                "PlusVibe завершил генерацию, "
+                "но не вернул resultUrls."
             )
 
+        image_url = urls[0]
+
+        # -------------------------------------------------
+        # 3. Скачиваем изображение
+        # -------------------------------------------------
+
         image_response = requests.get(
-            urls[0],
+            image_url,
             timeout=60,
         )
 
         if not image_response.ok:
             raise RuntimeError(
-                "Не удалось скачать готовое изображение."
+                "Не удалось скачать изображение "
+                f"из PlusVibe: HTTP "
+                f"{image_response.status_code}"
             )
 
-        if (
-            len(image_response.content)
-            > IMAGE_MAX_BYTES
-        ):
+        image_bytes = (
+            image_response.content
+        )
+
+        size = len(
+            image_bytes
+        )
+
+        print(
+            f"Image downloaded: "
+            f"{size / 1024 / 1024:.2f} MB"
+        )
+
+        if size > DOCUMENT_MAX_BYTES:
             raise RuntimeError(
-                "Готовое изображение слишком большое для Telegram."
+                "PlusVibe вернул файл больше "
+                "50 MB — Telegram не сможет его принять."
             )
+
+        if size == 0:
+            raise RuntimeError(
+                "PlusVibe вернул пустой файл."
+            )
+
+        # -------------------------------------------------
+        # 4. Отправляем в Telegram
+        # -------------------------------------------------
 
         price = result.get(
             "priceRub"
@@ -301,29 +410,75 @@ def generate_image(
             price,
             (int, float),
         ) and price > 0:
+
             caption += (
-                f"\nСтоимость: {price:.2f} ₽"
+                f"\nСтоимость: "
+                f"{price:.2f} ₽"
             )
 
-        sent = bot.tg(
-            "sendPhoto",
-            {
-                "chat_id": chat_id,
-                "caption": caption,
-            },
-            files={
-                "photo": (
-                    "bulba_image.png",
-                    image_response.content,
-                )
-            },
-            timeout=60,
-        )
+        sent = False
+
+        # Сначала обычная картинка
+        if size <= PHOTO_MAX_BYTES:
+
+            photo_result = bot.tg(
+                "sendPhoto",
+                {
+                    "chat_id":
+                        chat_id,
+
+                    "caption":
+                        caption,
+                },
+                files={
+                    "photo": (
+                        "bulba_image.png",
+                        image_bytes,
+                        "image/png",
+                    )
+                },
+                timeout=60,
+            )
+
+            if photo_result:
+                sent = True
+
+        # Если sendPhoto не прошёл —
+        # отправляем как документ
+        if not sent:
+
+            document_result = bot.tg(
+                "sendDocument",
+                {
+                    "chat_id":
+                        chat_id,
+
+                    "caption":
+                        caption,
+                },
+                files={
+                    "document": (
+                        "bulba_image.png",
+                        image_bytes,
+                        "image/png",
+                    )
+                },
+                timeout=60,
+            )
+
+            if document_result:
+                sent = True
 
         if not sent:
             raise RuntimeError(
-                "Telegram не принял изображение."
+                "Telegram не смог принять "
+                "сгенерированное изображение. "
+                "Проверь логи Bothost."
             )
+
+        # -------------------------------------------------
+        # 5. Сохраняем статистику
+        # -------------------------------------------------
 
         u["requests"] += 1
 
@@ -331,15 +486,22 @@ def generate_image(
             "total_requests"
         ] += 1
 
-        chat = bot.get_chat(u)
+        chat = bot.get_chat(
+            u
+        )
 
         chat["requests"] += 1
 
-        chat["last_prompt"] = prompt
+        chat["last_prompt"] = (
+            prompt
+        )
 
         chat["last_request"] = {
-            "kind": "image_generation",
-            "text": prompt,
+            "kind":
+                "image_generation",
+
+            "text":
+                prompt,
         }
 
         bot.add_history(
@@ -360,12 +522,17 @@ def generate_image(
             user_id
         )
 
+        # -------------------------------------------------
+        # 6. Меняем сообщение статуса
+        # -------------------------------------------------
+
         if status:
 
             bot.edit_message(
                 chat_id,
                 status["message_id"],
-                "✅ Изображение готово и отправлено выше.",
+                "✅ Изображение готово "
+                "и отправлено выше.",
                 bot.main_keyboard(),
             )
 
@@ -376,8 +543,8 @@ def generate_image(
             repr(e),
         )
 
-        message = (
-            "❌ Не удалось создать изображение.\n\n"
+        error_text = (
+            "❌ Ошибка генерации изображения.\n\n"
             f"{e}"
         )
 
@@ -386,7 +553,7 @@ def generate_image(
             bot.edit_message(
                 chat_id,
                 status["message_id"],
-                message,
+                error_text,
                 bot.main_keyboard(),
             )
 
@@ -394,7 +561,7 @@ def generate_image(
 
             bot.send_message(
                 chat_id,
-                message,
+                error_text,
                 bot.main_keyboard(),
             )
 
@@ -408,17 +575,20 @@ def poll_job(
         + POLL_TIMEOUT
     )
 
+    attempt = 0
+
     while (
         time.monotonic()
         < deadline
     ):
 
+        attempt += 1
+
         response = requests.get(
             f"{PLUSVIBE_URL}/api/media/jobs/{job_id}",
             headers={
-                "Authorization": (
-                    f"Bearer {api_key}"
-                )
+                "Authorization":
+                    f"Bearer {api_key}",
             },
             timeout=20,
         )
@@ -434,13 +604,27 @@ def poll_job(
             "status"
         )
 
+        print(
+            f"Image job {job_id}: "
+            f"{status} "
+            f"(poll #{attempt})"
+        )
+
         if status == "success":
             return data
 
         if status == "fail":
+
             raise RuntimeError(
-                data.get("failMsg")
-                or "Генерация завершилась ошибкой."
+                data.get(
+                    "failMsg"
+                )
+                or
+                data.get(
+                    "message"
+                )
+                or
+                "Генерация завершилась ошибкой."
             )
 
         time.sleep(
@@ -448,11 +632,13 @@ def poll_job(
         )
 
     raise RuntimeError(
-        "Генерация заняла слишком много времени. Попробуй ещё раз."
+        "Генерация заняла больше "
+        "90 секунд. Попробуй ещё раз."
     )
 
 
 def _api_error(response):
+
     try:
 
         data = response.json()
@@ -473,7 +659,9 @@ def _api_error(response):
             )
 
         if message:
-            return str(message)
+            return str(
+                message
+            )
 
     except Exception:
         pass
@@ -483,9 +671,10 @@ def _api_error(response):
     ).strip()
 
     return (
-        f"PlusVibe HTTP {response.status_code}"
+        f"PlusVibe HTTP "
+        f"{response.status_code}"
         + (
-            f": {text[:300]}"
+            f": {text[:500]}"
             if text
             else ""
         )
