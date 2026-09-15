@@ -818,6 +818,15 @@ def add_history(u, role, content):
     chat["history"] = chat["history"][-MAX_HISTORY:]
 
 
+def detect_media_intent(text):
+    """Compatibility hook for miniapp_server.
+
+    Media generation is handled explicitly by Media Studio, so normal
+    chat messages must stay on the text-AI path.
+    """
+    return None
+
+
 def consume_license_after_success(user_id):
     """Atomically count a successful licensed request after completion."""
     if os.getenv("LICENSE_REQUIRED", "0").strip() != "1" or is_admin(user_id):
