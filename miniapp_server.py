@@ -15,14 +15,18 @@ from licenses import activate_license, get_license_status, is_admin, user_has_ac
 
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "3000"))
-MAX_BODY = 14 * 1024 * 1024
+MAX_BODY = 15 * 1024 * 1024
 MAX_MESSAGE = 12000
 MAX_FILE_BYTES = 10 * 1024 * 1024
 AUTH_MAX_AGE = 24 * 60 * 60
 STYLE_VALUES = {"normal", "short", "detailed"}
+import threading
+
 _REQUEST_CACHE = {}
-_REQUEST_CACHE_LOCK = __import__("threading").RLock()
+_REQUEST_INFLIGHT = set()
+_REQUEST_CACHE_LOCK = threading.RLock()
 _REQUEST_CACHE_TTL = 90
+MAX_HTTP_THREADS = max(4, min(64, int(os.getenv("MAX_HTTP_THREADS", "24"))))
 ROOT = Path(__file__).resolve().parent
 MINIAPP_FILE = ROOT / "miniapp" / "index.html"
 if not MINIAPP_FILE.exists():
@@ -78,9 +82,19 @@ def validate_init_data(init_data):
     token = os.getenv("BOT_TOKEN", "").strip()
     if not token:
         raise RuntimeError("BOT_TOKEN не установлен.")
-    parsed = urllib.parse.parse_qs(init_data, keep_blank_values=True)
-    received_hash = parsed.get("hash", [None])[0]
-    auth_date_raw = parsed.get("auth_date", [None])[0]
+    pairs_raw = urllib.parse.parse_qsl(init_data, keep_blank_values=True)
+    keys = [k for k, _ in pairs_raw]
+    if keys.count("hash") != 1 or keys.count("auth_date") != 1:
+        raise ValueError("Некорректные Telegram initData.")
+    if len(pairs_raw) > 100:
+        raise ValueError("Слишком много параметров Telegram initData.")
+    parsed = {}
+    for key, value in pairs_raw:
+        if key in parsed:
+            raise ValueError("Дублирующийся параметр Telegram initData.")
+        parsed[key] = value
+    received_hash = parsed.get("hash")
+    auth_date_raw = parsed.get("auth_date")
     if not received_hash or not auth_date_raw:
         raise ValueError("Некорректные Telegram initData.")
     try:
@@ -89,13 +103,13 @@ def validate_init_data(init_data):
         raise ValueError("Некорректный auth_date.") from exc
     if abs(int(time.time()) - auth_date) > AUTH_MAX_AGE:
         raise ValueError("Сессия Telegram устарела. Перезапусти Mini App.")
-    pairs = [f"{k}={parsed[k][0]}" for k in sorted(parsed) if k != "hash"]
+    pairs = [f"{k}={parsed[k]}" for k in sorted(parsed) if k != "hash"]
     data_check_string = "\n".join(pairs)
     secret_key = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
     calculated = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(calculated, received_hash):
         raise ValueError("Неверная подпись Telegram.")
-    user_raw = parsed.get("user", [None])[0]
+    user_raw = parsed.get("user")
     try:
         tg_user = json.loads(user_raw or "{}")
     except Exception as exc:
@@ -138,6 +152,27 @@ def models_payload():
     return out
 
 
+def sanitize_media_opts(value):
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("Некорректные параметры медиа.")
+    out = {}
+    for key, item in list(value.items())[:32]:
+        k = str(key).strip()[:50]
+        if not k:
+            continue
+        if isinstance(item, (str, int, float, bool)):
+            out[k] = str(item)[:200] if isinstance(item, str) else item
+        elif isinstance(item, list):
+            vals = []
+            for x in item[:20]:
+                if isinstance(x, (str, int, float, bool)):
+                    vals.append(str(x)[:100] if isinstance(x, str) else x)
+            out[k] = vals
+    return out
+
+
 def chat_title(cid, chat):
     title = str(chat.get("title") or "").strip()
     if title:
@@ -149,35 +184,63 @@ def chat_title(cid, chat):
 
 
 def state(uid, tg_user, user):
-    chats = []
     active_id = str(user.get("active_chat", "main"))
+    chats = []
     pinned = {str(x) for x in user.get("pinned_chats", [])}
     for cid, c in user.get("chats", {}).items():
         if not isinstance(c, dict):
             continue
         history = []
-        for m in c.get("history", []):
-            if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
-                history.append({"role": m["role"], "content": str(m.get("content") or "")})
+        raw_history = c.get("history", [])
+        if str(cid) == active_id:
+            for m in raw_history:
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
+                    history.append({"role": m["role"], "content": str(m.get("content") or "")})
+        preview = ""
+        if raw_history:
+            for m in reversed(raw_history):
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
+                    preview = " ".join(str(m.get("content") or "").split())[:100]
+                    break
         last = c.get("last_request")
         ts = int(last.get("ts", 0)) if isinstance(last, dict) else int(last or 0) if isinstance(last, (int, float)) else 0
         chats.append({
-            "id": str(cid), "title": chat_title(str(cid), c),
-            "messages": history if str(cid) == active_id else [],
-            "requests": int(c.get("requests") or 0), "created": int(c.get("created") or 0),
-            "last_request": ts, "pinned": str(cid) in pinned,
+            "id": str(cid),
+            "title": chat_title(str(cid), c),
+            "preview": preview,
+            "messages": history,
+            "requests": int(c.get("requests") or 0),
+            "created": int(c.get("created") or 0),
+            "last_request": ts,
+            "pinned": str(cid) in pinned,
         })
     chats.sort(key=lambda x: (not x["pinned"], -x["last_request"], -x["created"]))
     allowed, reason = access(uid)
     return {
-        "version": bot.BOT_VERSION, "model": user.get("model", "auto"), "style": user.get("style", "normal"),
-        "active_chat": str(user.get("active_chat", "main")), "chats": chats,
-        "memory": user.get("memory", {}), "favorites": user.get("favorites", []),
-        "requests": int(user.get("requests") or 0), "errors": int(user.get("errors") or 0),
+        "version": bot.BOT_VERSION,
+        "model": user.get("model", "auto"),
+        "style": user.get("style", "normal"),
+        "active_chat": active_id,
+        "chats": chats,
+        "memory": user.get("memory", {}),
+        "favorites": user.get("favorites", []),
+        "requests": int(user.get("requests") or 0),
+        "errors": int(user.get("errors") or 0),
         "telegram_user": {k: tg_user.get(k, "") for k in ("id", "first_name", "last_name", "username", "language_code", "photo_url")},
-        "license": {"allowed": bool(allowed), "active": bool(allowed), "reason": reason, "required": os.getenv("LICENSE_REQUIRED", "0") == "1", "status": get_license_status(uid)},
-        "is_admin": bool(is_admin(uid)), "admin": bool(is_admin(uid)), "rules_count": len(bot.get_global_rules(False)) if is_admin(uid) else 0,
-        "stats": {"total_requests": int(bot.db.get("total_requests") or 0), "total_errors": int(bot.db.get("total_errors") or 0)},
+        "license": {
+            "allowed": bool(allowed),
+            "active": bool(allowed),
+            "reason": reason,
+            "required": os.getenv("LICENSE_REQUIRED", "0") == "1",
+            "status": get_license_status(uid),
+        },
+        "is_admin": bool(is_admin(uid)),
+        "admin": bool(is_admin(uid)),
+        "rules_count": len(bot.get_global_rules(False)) if is_admin(uid) else 0,
+        "stats": {
+            "total_requests": int(bot.db.get("total_requests") or 0),
+            "total_errors": int(bot.db.get("total_errors") or 0),
+        },
     }
 
 
@@ -279,59 +342,64 @@ def answer_text(uid, user, text, data):
 
 def handle_chat(uid, tg_user, user, data):
     request_id = str(data.get("request_id") or "").strip()[:100]
-    if request_id:
+    cache_key = f"{uid}:{request_id}" if request_id else None
+    if cache_key:
         now = time.time()
         with _REQUEST_CACHE_LOCK:
             for key, item in list(_REQUEST_CACHE.items()):
                 if now - item[0] > _REQUEST_CACHE_TTL:
                     _REQUEST_CACHE.pop(key, None)
-            cached = _REQUEST_CACHE.get(f"{uid}:{request_id}")
+            cached = _REQUEST_CACHE.get(cache_key)
             if cached and now - cached[0] <= _REQUEST_CACHE_TTL:
                 return cached[1]
+            if cache_key in _REQUEST_INFLIGHT:
+                raise RuntimeError("Этот запрос уже обрабатывается.")
+            _REQUEST_INFLIGHT.add(cache_key)
 
-    allowed, reason = access(uid)
-    if not allowed:
-        raise PermissionError(reason or "Нужна активная лицензия.")
-    text = str(data.get("message") or "").strip()
-    if len(text) > MAX_MESSAGE:
-        raise ValueError("Сообщение слишком длинное.")
-    cid, chat = get_chat(user, data.get("chat_id"))
-    user["active_chat"] = cid
-    if not text and not data.get("image") and not data.get("file"):
-        raise ValueError("Сообщение пустое.")
-    if not bot.allowed_request(user):
-        raise ValueError("Слишком много запросов. Подожди немного.")
+    try:
+        allowed, reason = access(uid)
+        if not allowed:
+            raise PermissionError(reason or "Нужна активная лицензия.")
+        text = str(data.get("message") or "").strip()
+        if len(text) > MAX_MESSAGE:
+            raise ValueError("Сообщение слишком длинное.")
+        cid, chat = get_chat(user, data.get("chat_id"))
+        user["active_chat"] = cid
+        if not text and not data.get("image") and not data.get("file"):
+            raise ValueError("Сообщение пустое.")
+        if not bot.allowed_request(user):
+            raise ValueError("Слишком много запросов. Подожди немного.")
 
-    # Media Studio is explicit. Do not accidentally turn normal chat into a media job.
-    media_kind = bot.detect_media_intent(text)
-    if media_kind and not data.get("image") and not data.get("file"):
-        model = str(data.get("media_model") or "").strip() or None
-        opts = data.get("media_opts") if isinstance(data.get("media_opts"), dict) else {}
-        job_id, selected = media_service.create_job(media_kind, text, model=model, opts=opts, user_id=uid)
-        media_service._set_job(job_id, prompt=text[:MAX_MESSAGE])
-        return {"job_id": job_id, "kind": media_kind, "model": selected["id"], "state": state(uid,tg_user,user)}
+        # Media Studio is explicit. Do not accidentally turn normal chat into a media job.
+        media_kind = bot.detect_media_intent(text)
+        if media_kind and not data.get("image") and not data.get("file"):
+            model = str(data.get("media_model") or "").strip() or None
+            opts = data.get("media_opts") if isinstance(data.get("media_opts"), dict) else {}
+            job_id, selected = media_service.create_job(media_kind, text, model=model, opts=opts, user_id=uid)
+            media_service._set_job(job_id, prompt=text[:MAX_MESSAGE])
+            return {"job_id": job_id, "kind": media_kind, "model": selected["id"], "state": state(uid, tg_user, user)}
 
-    (answer, error), kind = answer_text(uid, user, text, data)
-    if not answer:
-        user["errors"] = int(user.get("errors") or 0) + 1
-        bot.db["total_errors"] = int(bot.db.get("total_errors") or 0) + 1
+        (answer, error), kind = answer_text(uid, user, text, data)
+        if not answer:
+            user["errors"] = int(user.get("errors") or 0) + 1
+            bot.db["total_errors"] = int(bot.db.get("total_errors") or 0) + 1
+            bot.save_db()
+            raise RuntimeError(error or "Не удалось получить ответ.")
+
+        output_file = maybe_create_file(text, answer)
+        commit_chat(user, chat, text, answer, kind)
         bot.save_db()
-        raise RuntimeError(error or "Не удалось получить ответ.")
-
-    # Files are generated only when explicitly requested and enough source data exists.
-    output_file = maybe_create_file(text, answer)
-    commit_chat(user, chat, text, answer, kind)
-    bot.save_db()
-    if not bot.consume_license_after_success(uid):
-        # The answer was already produced, so never destroy the successful chat record.
-        raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
-    result = {"ok": True, "answer": answer, "state": state(uid,tg_user,user)}
-    if output_file:
-        result["file"] = output_file
-    if request_id:
-        with _REQUEST_CACHE_LOCK:
-            _REQUEST_CACHE[f"{uid}:{request_id}"] = (time.time(), result)
-    return result
+        result = {"ok": True, "answer": answer, "state": state(uid, tg_user, user)}
+        if output_file:
+            result["file"] = output_file
+        if cache_key:
+            with _REQUEST_CACHE_LOCK:
+                _REQUEST_CACHE[cache_key] = (time.time(), result)
+        return result
+    finally:
+        if cache_key:
+            with _REQUEST_CACHE_LOCK:
+                _REQUEST_INFLIGHT.discard(cache_key)
 
 
 def require_admin(uid):
@@ -354,15 +422,8 @@ def finalize_media(uid, tg_user, user, item):
     claimed = media_service.claim_success(item["job_id"])
     if not claimed:
         return item
-    # Count a media request exactly once. If the license check races with
-    # another request, release the claim so the next poll can retry safely.
-    if not bot.consume_license_after_success(uid):
-        media_service._set_job(
-            item["job_id"],
-            license_claimed=False,
-            license_error="Лицензионный лимит исчерпан после генерации.",
-        )
-        return media_service.job_status(item["job_id"])
+    # The request was reserved atomically when the media job was created.
+    # Do not consume it again during polling/finalization.
     cid, chat = get_chat(user, None)
     prompt = str(item.get("prompt") or "Медиа-задача")
     summary = "Медиа создано: " + ", ".join(item.get("urls") or [])[:2000]
@@ -375,6 +436,19 @@ def finalize_media(uid, tg_user, user, item):
     bot.db["total_requests"] = int(bot.db.get("total_requests") or 0) + 1
     bot.save_db()
     return media_service.job_status(item["job_id"]) or item
+
+
+class LimitedThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+
+    def __init__(self, server_address, handler_cls):
+        super().__init__(server_address, handler_cls)
+        self._request_slots = threading.BoundedSemaphore(MAX_HTTP_THREADS)
+
+    def process_request_thread(self, request, client_address):
+        with self._request_slots:
+            super().process_request_thread(request, client_address)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -395,7 +469,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.error(500, "Mini App файл не найден.")
             return
         if path == "/health":
-            send_json(self, 200, {"ok": True, "service": "BulbaMaxAI", "version": bot.BOT_VERSION})
+            send_json(self, 200, {"ok": True, "service": "BulbaMaxAI", "version": bot.BOT_VERSION, "media": media_service.configured()})
             return
         try:
             uid, tg_user, user = auth(self)
@@ -497,7 +571,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not code: raise ValueError("Введи код лицензии.")
                 ok,msg=activate_license(uid,code); send_json(self,200,{"ok":ok,"message":msg,"state":state(uid,tg_user,user)} if ok else {"ok":False,"error":msg}); return
             if path == "/api/media/generate":
-                kind=data.get("kind"); prompt=str(data.get("prompt") or "").strip(); model=str(data.get("model") or "").strip() or None; opts=data.get("opts") if isinstance(data.get("opts"),dict) else {}
+                kind=data.get("kind"); prompt=str(data.get("prompt") or "").strip(); model=str(data.get("model") or "").strip() or None; opts=sanitize_media_opts(data.get("opts"))
                 job_id,selected=media_service.create_job(kind,prompt,model=model,opts=opts,user_id=uid)
                 media_service._set_job(job_id,prompt=prompt[:MAX_MESSAGE])
                 send_json(self,202,{"ok":True,"job_id":job_id,"kind":media_service.normalize_kind(kind),"model":selected["id"]}); return
@@ -534,7 +608,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run_server():
-    server = ThreadingHTTPServer((HOST,PORT),Handler)
+    server = LimitedThreadingHTTPServer((HOST, PORT), Handler)
     print(f"BulbaMaxAI Mini App server listening on {HOST}:{PORT}")
     try:
         server.serve_forever()
