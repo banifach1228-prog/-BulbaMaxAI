@@ -150,6 +150,7 @@ def chat_title(cid, chat):
 
 def state(uid, tg_user, user):
     chats = []
+    active_id = str(user.get("active_chat", "main"))
     pinned = {str(x) for x in user.get("pinned_chats", [])}
     for cid, c in user.get("chats", {}).items():
         if not isinstance(c, dict):
@@ -161,7 +162,8 @@ def state(uid, tg_user, user):
         last = c.get("last_request")
         ts = int(last.get("ts", 0)) if isinstance(last, dict) else int(last or 0) if isinstance(last, (int, float)) else 0
         chats.append({
-            "id": str(cid), "title": chat_title(str(cid), c), "messages": history,
+            "id": str(cid), "title": chat_title(str(cid), c),
+            "messages": history if str(cid) == active_id else [],
             "requests": int(c.get("requests") or 0), "created": int(c.get("created") or 0),
             "last_request": ts, "pinned": str(cid) in pinned,
         })
@@ -352,9 +354,14 @@ def finalize_media(uid, tg_user, user, item):
     claimed = media_service.claim_success(item["job_id"])
     if not claimed:
         return item
-    # Count a media request exactly once.
+    # Count a media request exactly once. If the license check races with
+    # another request, release the claim so the next poll can retry safely.
     if not bot.consume_license_after_success(uid):
-        media_service._set_job(item["job_id"], license_error="Лицензионный лимит исчерпан после генерации.")
+        media_service._set_job(
+            item["job_id"],
+            license_claimed=False,
+            license_error="Лицензионный лимит исчерпан после генерации.",
+        )
         return media_service.job_status(item["job_id"])
     cid, chat = get_chat(user, None)
     prompt = str(item.get("prompt") or "Медиа-задача")
