@@ -1,64 +1,220 @@
-import json, os, secrets, time, threading
+import json
+import os
+import secrets
+import threading
+import time
 from pathlib import Path
-LICENSE_FILE='licenses.json'
-ADMIN_IDS={x.strip() for x in os.getenv('ADMIN_IDS','').split(',') if x.strip()}
-_LICENSE_LOCK=threading.RLock()
+
+LICENSE_FILE = "licenses.json"
+ADMIN_IDS = {x.strip() for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
+_LICENSE_LOCK = threading.RLock()
+
+
+def _empty_db():
+    return {"codes": {}, "users": {}}
+
+
 def _load():
     try:
-        data=json.loads(Path(LICENSE_FILE).read_text(encoding='utf-8'))
-        if isinstance(data,dict): data.setdefault('codes',{}); data.setdefault('users',{}); return data
-    except (OSError,json.JSONDecodeError): pass
-    return {'codes':{},'users':{}}
+        data = json.loads(Path(LICENSE_FILE).read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data.setdefault("codes", {})
+            data.setdefault("users", {})
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return _empty_db()
+
+
 def _save(db):
-    tmp=Path(LICENSE_FILE+'.tmp'); tmp.write_text(json.dumps(db,ensure_ascii=False,indent=2),encoding='utf-8'); os.replace(tmp,LICENSE_FILE)
-def admin_ids(): return ADMIN_IDS
-def is_admin(user_id): return str(user_id) in ADMIN_IDS
-def _now(): return int(time.time())
-def create_license(days,requests_limit=0):
-    days=int(days); requests_limit=int(requests_limit)
-    if days<=0 or days>3650: raise ValueError('Некорректный срок')
-    if requests_limit<0: raise ValueError('Некорректный лимит')
-    db=_load()
-    while True:
-        code='BULBA-'+secrets.token_hex(4).upper()+'-'+secrets.token_hex(3).upper()
-        if code not in db['codes']: break
-    db['codes'][code]={'days':days,'requests_limit':requests_limit,'used':False,'created_at':_now()}; _save(db); return code
-def activate_license(user_id,code):
-    uid=str(user_id); code=str(code).strip().upper(); db=_load(); item=db['codes'].get(code)
-    if not item: return False,'❌ Код не найден.'
-    if item.get('used'): return False,'❌ Этот код уже использован.'
-    if int(item.get('days',0))<=0: return False,'❌ Код недействителен.'
-    start=_now(); existing=db['users'].get(uid,{}); old_until=int(existing.get('expires_at',0)); start=max(start,old_until) if old_until>start else start; expires=start+int(item['days'])*86400
-    db['users'][uid]={'expires_at':expires,'requests_limit':int(item.get('requests_limit',0)),'requests_used':0,'blocked':False}; item['used']=True; item['used_by']=uid; item['used_at']=_now(); _save(db)
-    return True,f'✅ Доступ активирован до {time.strftime("%d.%m.%Y %H:%M",time.localtime(expires))}.'
-def user_has_access(user_id):
-    uid=str(user_id); db=_load(); item=db['users'].get(uid)
-    if not item: return False,'⛔ Активной лицензии нет.'
-    if item.get('blocked'): return False,'⛔ Доступ заблокирован.'
-    if int(item.get('expires_at',0))<=_now(): return False,'⏰ Срок доступа закончился.'
-    limit=int(item.get('requests_limit',0)); used=int(item.get('requests_used',0))
-    if limit>0 and used>=limit: return False,'📊 Лимит запросов по тарифу исчерпан.'
-    return True,''
-def consume_request(user_id):
-    uid=str(user_id)
+    path = Path(LICENSE_FILE)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        json.dumps(db, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def admin_ids():
+    return ADMIN_IDS
+
+
+def is_admin(user_id):
+    return str(user_id) in ADMIN_IDS
+
+
+def _now():
+    return int(time.time())
+
+
+def create_license(days, requests_limit=0):
+    days = int(days)
+    requests_limit = int(requests_limit)
+    if days <= 0 or days > 3650:
+        raise ValueError("Некорректный срок")
+    if requests_limit < 0:
+        raise ValueError("Некорректный лимит")
+
     with _LICENSE_LOCK:
-        db=_load(); item=db['users'].get(uid)
-        if not item or item.get('blocked') or int(item.get('expires_at',0))<=_now(): return False,'⛔ Доступ недоступен.'
-        limit=int(item.get('requests_limit',0)); used=int(item.get('requests_used',0))
-        if limit>0 and used>=limit: return False,'📊 Лимит запросов исчерпан.'
-        item['requests_used']=used+1; _save(db); return True,''
+        db = _load()
+        while True:
+            code = "BULBA-" + secrets.token_hex(4).upper() + "-" + secrets.token_hex(3).upper()
+            if code not in db["codes"]:
+                break
+        db["codes"][code] = {
+            "days": days,
+            "requests_limit": requests_limit,
+            "used": False,
+            "created_at": _now(),
+        }
+        _save(db)
+        return code
+
+
+def activate_license(user_id, code):
+    uid = str(user_id)
+    code = str(code).strip().upper()
+    with _LICENSE_LOCK:
+        db = _load()
+        item = db["codes"].get(code)
+        if not item:
+            return False, "❌ Код не найден."
+        if item.get("used"):
+            return False, "❌ Этот код уже использован."
+        if int(item.get("days", 0)) <= 0:
+            return False, "❌ Код недействителен."
+
+        start = _now()
+        existing = db["users"].get(uid, {})
+        old_until = int(existing.get("expires_at", 0))
+        if old_until > start:
+            start = old_until
+
+        expires = start + int(item["days"]) * 86400
+        db["users"][uid] = {
+            "expires_at": expires,
+            "requests_limit": int(item.get("requests_limit", 0)),
+            "requests_used": 0,
+            "blocked": False,
+        }
+        item["used"] = True
+        item["used_by"] = uid
+        item["used_at"] = _now()
+        _save(db)
+
+    return True, f"✅ Доступ активирован до {time.strftime('%d.%m.%Y %H:%M', time.localtime(expires))}."
+
+
+def user_has_access(user_id):
+    uid = str(user_id)
+    with _LICENSE_LOCK:
+        db = _load()
+        item = db["users"].get(uid)
+        if not item:
+            return False, "⛔ Активной лицензии нет."
+        if item.get("blocked"):
+            return False, "⛔ Доступ заблокирован."
+        if int(item.get("expires_at", 0)) <= _now():
+            return False, "⏰ Срок доступа закончился."
+        limit = int(item.get("requests_limit", 0))
+        used = int(item.get("requests_used", 0))
+        if limit > 0 and used >= limit:
+            return False, "📊 Лимит запросов по тарифу исчерпан."
+        return True, ""
+
+
+def reserve_request(user_id):
+    """Atomically reserve one request before expensive processing starts."""
+    uid = str(user_id)
+    with _LICENSE_LOCK:
+        db = _load()
+        item = db["users"].get(uid)
+        if not item:
+            return False, "⛔ Активной лицензии нет."
+        if item.get("blocked"):
+            return False, "⛔ Доступ заблокирован."
+        if int(item.get("expires_at", 0)) <= _now():
+            return False, "⏰ Срок доступа закончился."
+
+        limit = int(item.get("requests_limit", 0))
+        used = int(item.get("requests_used", 0))
+        if limit > 0 and used >= limit:
+            return False, "📊 Лимит запросов исчерпан."
+
+        item["requests_used"] = used + 1
+        _save(db)
+        return True, ""
+
+
+def release_request(user_id):
+    """Release a request reservation after a failed operation."""
+    uid = str(user_id)
+    with _LICENSE_LOCK:
+        db = _load()
+        item = db["users"].get(uid)
+        if not item:
+            return False, "Пользователь не найден."
+        used = int(item.get("requests_used", 0))
+        item["requests_used"] = max(0, used - 1)
+        _save(db)
+        return True, ""
+
+
+def consume_request(user_id):
+    """Compatibility alias: consumption is now an atomic reservation."""
+    return reserve_request(user_id)
+
+
 def get_license_status(user_id):
-    uid=str(user_id); db=_load(); item=db['users'].get(uid)
-    if not item: return '👤 Лицензия не найдена.'
-    expires=int(item.get('expires_at',0)); state='⏰ Истёк' if expires<=_now() else ('🚫 Заблокирован' if item.get('blocked') else '✅ Активна'); limit=int(item.get('requests_limit',0)); used=int(item.get('requests_used',0)); left='∞' if limit<=0 else str(max(0,limit-used))
-    return f'👤 Профиль\n\nСтатус: {state}\nДо: {time.strftime("%d.%m.%Y %H:%M",time.localtime(expires))}\nЗапросов осталось: {left}'
+    uid = str(user_id)
+    with _LICENSE_LOCK:
+        db = _load()
+        item = db["users"].get(uid)
+        if not item:
+            return "👤 Лицензия не найдена."
+        expires = int(item.get("expires_at", 0))
+        state = "⏰ Истёк" if expires <= _now() else ("🚫 Заблокирован" if item.get("blocked") else "✅ Активна")
+        limit = int(item.get("requests_limit", 0))
+        used = int(item.get("requests_used", 0))
+        left = "∞" if limit <= 0 else str(max(0, limit - used))
+        return (
+            "👤 Профиль\n\n"
+            f"Статус: {state}\n"
+            f"До: {time.strftime('%d.%m.%Y %H:%M', time.localtime(expires))}\n"
+            f"Запросов осталось: {left}"
+        )
+
+
 def revoke_user(user_id):
-    db=_load(); uid=str(user_id)
-    if uid not in db['users']: return '❌ Пользователь не найден.'
-    db['users'][uid]['expires_at']=0; _save(db); return '✅ Доступ отозван.'
+    uid = str(user_id)
+    with _LICENSE_LOCK:
+        db = _load()
+        if uid not in db["users"]:
+            return "❌ Пользователь не найден."
+        db["users"][uid]["expires_at"] = 0
+        _save(db)
+    return "✅ Доступ отозван."
+
+
 def block_user(user_id):
-    db=_load(); uid=str(user_id); db['users'].setdefault(uid,{'expires_at':0,'requests_limit':0,'requests_used':0})['blocked']=True; _save(db); return '🚫 Пользователь заблокирован.'
+    uid = str(user_id)
+    with _LICENSE_LOCK:
+        db = _load()
+        db["users"].setdefault(
+            uid,
+            {"expires_at": 0, "requests_limit": 0, "requests_used": 0},
+        )["blocked"] = True
+        _save(db)
+    return "🚫 Пользователь заблокирован."
+
+
 def unblock_user(user_id):
-    db=_load(); uid=str(user_id)
-    if uid not in db['users']: return '❌ Пользователь не найден.'
-    db['users'][uid]['blocked']=False; _save(db); return '✅ Пользователь разблокирован.'
+    uid = str(user_id)
+    with _LICENSE_LOCK:
+        db = _load()
+        if uid not in db["users"]:
+            return "❌ Пользователь не найден."
+        db["users"][uid]["blocked"] = False
+        _save(db)
+    return "✅ Пользователь разблокирован."
