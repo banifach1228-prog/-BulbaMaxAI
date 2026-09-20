@@ -865,7 +865,7 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             chat["last_prompt"] = text
             chat["last_request"] = {"kind": "text", "text": text}
             save_db()
-            if not consume_license_after_success(chat_id):
+            if not consume_license_after_success(user_id):
                 raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
             if status_msg:
                 edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
@@ -926,7 +926,7 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
                     chat["last_prompt"] = text
                     chat["last_request"] = {"kind": "text", "text": text}
                     save_db()
-                    if not consume_license_after_success(chat_id):
+                    if not consume_license_after_success(user_id):
                         raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
                     return
 
@@ -959,7 +959,7 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
                 chat["last_prompt"] = text
                 chat["last_request"] = {"kind": "text", "text": text}
                 save_db()
-                if not consume_license_after_success(chat_id):
+                if not consume_license_after_success(user_id):
                     raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
                 return
 
@@ -1001,7 +1001,7 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             "file_name": file_name,
         }
         save_db()
-        if not consume_license_after_success(chat_id):
+        if not consume_license_after_success(user_id):
             raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
 
         if status_msg:
