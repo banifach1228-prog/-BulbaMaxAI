@@ -19,6 +19,8 @@ from licenses import (
     create_license,
     get_license_status,
     is_admin,
+    release_request,
+    reserve_request,
     revoke_user,
     unblock_user,
     user_has_access,
@@ -26,7 +28,7 @@ from licenses import (
 
 import requests
 
-BOT_VERSION = "V17.2"
+BOT_VERSION = "V18.0"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_KEY = os.getenv("API_KEY", "").strip()
 
@@ -827,19 +829,44 @@ def detect_media_intent(text):
     return None
 
 
-def consume_license_after_success(user_id):
-    """Atomically count a successful licensed request after completion."""
+def reserve_license_request(user_id):
+    """Reserve one licensed request before expensive work starts."""
     if os.getenv("LICENSE_REQUIRED", "0").strip() != "1" or is_admin(user_id):
         return True
-    from licenses import consume_request
-    ok, _ = consume_request(str(user_id))
-    return ok
+    ok, _ = reserve_request(str(user_id))
+    return bool(ok)
 
 
-def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None):
+def release_license_request(user_id):
+    """Return a reserved request when processing fails before completion."""
+    if os.getenv("LICENSE_REQUIRED", "0").strip() != "1" or is_admin(user_id):
+        return True
+    ok, _ = release_request(str(user_id))
+    return bool(ok)
+
+
+def consume_license_after_success(user_id):
+    """Backward-compatible alias for older integrations."""
+    return reserve_license_request(user_id)
+
+
+def record_success(u, chat):
+    u["requests"] = int(u.get("requests") or 0) + 1
+    chat["requests"] = int(chat.get("requests") or 0) + 1
+    db["total_requests"] = int(db.get("total_requests") or 0) + 1
+
+
+def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None):
     if not allowed_request(u):
         send_message(chat_id, "⏳ Слишком много запросов. Подожди несколько секунд.", main_keyboard())
         return
+
+    license_user_id = str(user_id if user_id is not None else chat_id)
+    reserved = reserve_license_request(license_user_id)
+    if not reserved:
+        send_message(chat_id, "⛔ Лимит лицензии исчерпан или доступ недоступен.", main_keyboard())
+        return
+    completed = False
 
     status = f"🧠 {BOT_VERSION}: анализирую задачу…"
     if image:
@@ -848,10 +875,7 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
         status = "📎 Читаю и анализирую файл…"
     status_msg = send_message(chat_id, status)
 
-    u["requests"] += 1
-    db["total_requests"] += 1
     chat = get_chat(u)
-    chat["requests"] += 1
 
     try:
         # Fast deterministic calculator path.
@@ -864,9 +888,9 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             add_history(u, "assistant", answer)
             chat["last_prompt"] = text
             chat["last_request"] = {"kind": "text", "text": text}
+            record_success(u, chat)
             save_db()
-            if not consume_license_after_success(user_id):
-                raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
+            completed = True
             if status_msg:
                 edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
             else:
@@ -925,9 +949,9 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
                     add_history(u, "assistant", f"Создан файл: {path.name}")
                     chat["last_prompt"] = text
                     chat["last_request"] = {"kind": "text", "text": text}
+                    record_success(u, chat)
                     save_db()
-                    if not consume_license_after_success(user_id):
-                        raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
+                    completed = True
                     return
 
             if action in ("create_pdf", "create_docx"):
@@ -958,9 +982,9 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
                 add_history(u, "assistant", answer)
                 chat["last_prompt"] = text
                 chat["last_request"] = {"kind": "text", "text": text}
+                record_success(u, chat)
                 save_db()
-                if not consume_license_after_success(user_id):
-                    raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
+                completed = True
                 return
 
         if image:
@@ -1000,9 +1024,9 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             "file_id": (media_ref or {}).get("file_id") if media_ref else None,
             "file_name": file_name,
         }
+        record_success(u, chat)
         save_db()
-        if not consume_license_after_success(user_id):
-            raise RuntimeError("Лицензия больше не позволяет выполнить запрос.")
+        completed = True
 
         if status_msg:
             edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
@@ -1019,6 +1043,9 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             edit_message(chat_id, status_msg["message_id"], msg, main_keyboard())
         else:
             send_message(chat_id, msg, main_keyboard())
+    finally:
+        if reserved and not completed:
+            release_license_request(license_user_id)
 
 
 def show_stats(chat_id, u):
@@ -1166,7 +1193,7 @@ def process_message(msg):
             days = int(parts[1])
             requests_limit = int(parts[2]) if len(parts) > 2 else 0
             code = create_license(days, requests_limit)
-            send_message(chat_id, f"🔑 Новый код:\n\n<code>{code}</code>\n\nСрок: {days} дн.\nЛимит запросов: {'без лимита' if requests_limit <= 0 else requests_limit}", main_keyboard())
+            send_message(chat_id, f"🔑 Новый код:\n\n{code}\n\nСрок: {days} дн.\nЛимит запросов: {'без лимита' if requests_limit <= 0 else requests_limit}", main_keyboard())
         except Exception:
             send_message(chat_id, "❌ Формат: /newcode DAYS [REQUESTS]", main_keyboard())
         return
@@ -1184,7 +1211,7 @@ def process_message(msg):
             requests_limit = int(parts[3]) if len(parts) > 3 else 0
             code = create_license(days, requests_limit)
             ok, message = activate_license(target, code)
-            send_message(chat_id, f"{message}\n\nКод: <code>{code}</code>", main_keyboard())
+            send_message(chat_id, f"{message}\n\nКод: {code}", main_keyboard())
         except Exception:
             send_message(chat_id, "❌ Формат: /give USER_ID DAYS [REQUESTS]", main_keyboard())
         return
@@ -1341,6 +1368,7 @@ def process_message(msg):
                 caption or "Что изображено на этом фото? Проанализируй изображение.",
                 image={"data": data, "mime": "image/jpeg"},
                 media_ref={"file_id": photo["file_id"]},
+                user_id=user_id,
             )
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось обработать изображение: {e}", main_keyboard())
@@ -1358,13 +1386,14 @@ def process_message(msg):
                 file_text=file_text,
                 file_name=doc.get("file_name", "file.txt"),
                 media_ref={"file_id": doc["file_id"]},
+                user_id=user_id,
             )
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось обработать файл: {e}", main_keyboard())
         return
 
     if text:
-        handle_ai_request(chat_id, u, text)
+        handle_ai_request(chat_id, u, text, user_id=user_id)
 
 
 def process_callback(q):
@@ -1452,6 +1481,7 @@ def process_callback(q):
                     last.get("text", ""),
                     image={"data": data_bytes, "mime": "image/jpeg"},
                     media_ref={"file_id": last["file_id"]},
+                    user_id=user_id,
                 )
             elif kind == "file" and last.get("file_id"):
                 data_bytes = tg_file(last["file_id"])
@@ -1464,9 +1494,10 @@ def process_callback(q):
                     file_text=file_text,
                     file_name=name,
                     media_ref={"file_id": last["file_id"]},
+                    user_id=user_id,
                 )
             else:
-                handle_ai_request(chat_id, u, last.get("text", ""))
+                handle_ai_request(chat_id, u, last.get("text", ""), user_id=user_id)
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось повторить запрос: {e}", main_keyboard())
         return
