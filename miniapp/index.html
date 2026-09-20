@@ -3,2237 +3,1208 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<meta name="theme-color" content="#0b0c10">
+<meta name="theme-color" content="#0b0c0f">
 <title>Bulba AI</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{
-  --bg:#0b0c10;
-  --panel:#12141a;
-  --panel2:#191c23;
-  --text:#f5f7fb;
-  --muted:#9299a8;
-  --line:rgba(255,255,255,.08);
-  --accent:#5e8cff;
-  --accent2:#7b61ff;
-  --bubble:#171a21;
-  --good:#55d98a;
-  --danger:#ff667a;
-  --shadow:0 18px 50px rgba(0,0,0,.35);
-  --nav-h:70px;
-  --composer-h:78px;
-  --vvh:100vh;
-}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{
-  margin:0;
-  width:100%;
-  min-height:100%;
-  background:var(--bg);
-  color:var(--text);
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif;
-  overscroll-behavior:none;
-}
-body{
-  min-height:100svh;
-  min-height:100dvh;
-  overflow:hidden;
-}
-button,input,textarea,select{
-  font:inherit;
-}
-button{
-  border:0;
-  color:inherit;
-}
-button:disabled{
-  opacity:.5;
-  pointer-events:none;
-}
-.app{
-  position:relative;
-  width:100%;
-  height:var(--vvh);
-  min-height:100svh;
-  overflow:hidden;
-}
-.topbar{
-  position:fixed;
-  top:0;
-  left:0;
-  right:0;
-  z-index:30;
-  height:calc(58px + env(safe-area-inset-top));
-  padding:env(safe-area-inset-top) 14px 0;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  background:rgba(11,12,16,.9);
-  backdrop-filter:blur(18px);
-  -webkit-backdrop-filter:blur(18px);
-  border-bottom:1px solid var(--line);
-}
-.brand{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  min-width:0;
-}
-.logo{
-  width:36px;
-  height:36px;
-  border-radius:12px;
-  display:grid;
-  place-items:center;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  box-shadow:0 8px 24px rgba(94,140,255,.25);
-  font-size:18px;
-  font-weight:800;
-}
-.brandText{
-  min-width:0;
-}
-.brandTitle{
-  font-size:16px;
-  font-weight:800;
-  line-height:19px;
-}
-.brandSub{
-  color:var(--muted);
-  font-size:11px;
-  line-height:14px;
-}
-.headerActions{
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
-.iconBtn{
-  width:38px;
-  height:38px;
-  border-radius:12px;
-  background:rgba(255,255,255,.06);
-  border:1px solid var(--line);
-  display:grid;
-  place-items:center;
-  font-size:18px;
-  cursor:pointer;
-}
-.content{
-  position:absolute;
-  inset:calc(58px + env(safe-area-inset-top)) 0 calc(var(--nav-h) + env(safe-area-inset-bottom)) 0;
-  overflow:hidden;
-}
-.screen{
-  display:none;
-  width:100%;
-  height:100%;
-}
-.screen.active{
-  display:block;
-}
-.chatScreen{
-  position:relative;
-}
-.messages{
-  position:absolute;
-  inset:0 0 calc(var(--composer-h) + 12px) 0;
-  overflow-y:auto;
-  overflow-x:hidden;
-  padding:18px 14px 22px;
-  scroll-behavior:smooth;
-  -webkit-overflow-scrolling:touch;
-}
-.message{
-  display:flex;
-  width:100%;
-  margin:0 0 13px;
-}
-.message.user{
-  justify-content:flex-end;
-}
-.bubble{
-  max-width:min(88%,620px);
-  padding:11px 13px;
-  border-radius:17px;
-  background:var(--bubble);
-  border:1px solid var(--line);
-  white-space:pre-wrap;
-  word-break:break-word;
-  font-size:15px;
-  line-height:1.42;
-}
-.message.user .bubble{
-  background:linear-gradient(135deg,#315dcf,#5b49c8);
-  border-color:transparent;
-  border-bottom-right-radius:6px;
-}
-.message.assistant .bubble{
-  border-bottom-left-radius:6px;
-}
-.message.system{
-  justify-content:center;
-}
-.message.system .bubble{
-  max-width:92%;
-  background:transparent;
-  border:0;
-  color:var(--muted);
-  font-size:12px;
-  text-align:center;
-}
-.typing{
-  display:flex;
-  align-items:center;
-  gap:5px;
-  min-height:20px;
-}
-.dot{
-  width:6px;
-  height:6px;
-  border-radius:50%;
-  background:#aeb6c8;
-  animation:blink 1s infinite ease-in-out;
-}
-.dot:nth-child(2){animation-delay:.15s}
-.dot:nth-child(3){animation-delay:.3s}
-@keyframes blink{
-  0%,80%,100%{opacity:.25;transform:translateY(0)}
-  40%{opacity:1;transform:translateY(-2px)}
-}
-.empty{
-  position:absolute;
-  inset:0;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:40px 22px;
-  text-align:center;
-  pointer-events:none;
-}
-.emptyInner{
-  max-width:390px;
-}
-.emptyLogo{
-  width:72px;
-  height:72px;
-  margin:0 auto 16px;
-  border-radius:23px;
-  display:grid;
-  place-items:center;
-  font-size:34px;
-  font-weight:900;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  box-shadow:0 18px 40px rgba(94,140,255,.22);
-}
-.empty h2{
-  margin:0 0 8px;
-  font-size:23px;
-}
-.empty p{
-  margin:0;
-  color:var(--muted);
-  line-height:1.45;
-  font-size:14px;
-}
-.suggestions{
-  display:flex;
-  gap:8px;
-  overflow-x:auto;
-  padding:0 14px 10px;
-  scrollbar-width:none;
-}
-.suggestions::-webkit-scrollbar{display:none}
-.suggestion{
-  flex:0 0 auto;
-  padding:9px 12px;
-  border-radius:13px;
-  border:1px solid var(--line);
-  background:rgba(255,255,255,.045);
-  color:#dce2ef;
-  font-size:12px;
-}
-.composer{
-  position:absolute;
-  left:0;
-  right:0;
-  bottom:0;
-  z-index:20;
-  min-height:var(--composer-h);
-  padding:8px 12px calc(8px + env(safe-area-inset-bottom));
-  background:linear-gradient(to top,rgba(11,12,16,.98),rgba(11,12,16,.9));
-  backdrop-filter:blur(18px);
-  -webkit-backdrop-filter:blur(18px);
-  border-top:1px solid var(--line);
-}
-.composerRow{
-  display:flex;
-  align-items:flex-end;
-  gap:8px;
-}
-.attachBtn,.sendBtn{
-  flex:0 0 auto;
-  width:43px;
-  height:43px;
-  border-radius:14px;
-  display:grid;
-  place-items:center;
-  background:var(--panel2);
-  border:1px solid var(--line);
-  cursor:pointer;
-}
-.sendBtn{
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  border:0;
-}
-.inputWrap{
-  flex:1;
-  min-width:0;
-  background:var(--panel);
-  border:1px solid var(--line);
-  border-radius:17px;
-  padding:7px 10px;
-}
-#input{
-  display:block;
-  width:100%;
-  min-height:28px;
-  max-height:120px;
-  padding:4px 0;
-  resize:none;
-  overflow-y:auto;
-  border:0;
-  outline:0;
-  color:var(--text);
-  background:transparent;
-  font-size:15px;
-  line-height:20px;
-}
-#input::placeholder{
-  color:#737b8d;
-}
-.filePreview{
-  display:none;
-  margin-bottom:7px;
-  padding:7px 9px;
-  border-radius:11px;
-  background:rgba(94,140,255,.1);
-  color:#b9c9ff;
-  font-size:11px;
-  align-items:center;
-  justify-content:space-between;
-  gap:8px;
-}
-.filePreview.show{
-  display:flex;
-}
-.filePreviewName{
-  min-width:0;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-}
-.nav{
-  position:fixed;
-  left:0;
-  right:0;
-  bottom:0;
-  z-index:40;
-  height:calc(var(--nav-h) + env(safe-area-inset-bottom));
-  padding:4px 8px env(safe-area-inset-bottom);
-  display:grid;
-  grid-template-columns:repeat(5,1fr);
-  background:rgba(15,16,21,.94);
-  backdrop-filter:blur(20px);
-  -webkit-backdrop-filter:blur(20px);
-  border-top:1px solid var(--line);
-}
-.navBtn{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:center;
-  gap:3px;
-  color:#777f90;
-  background:transparent;
-  font-size:10px;
-  cursor:pointer;
-  border-radius:12px;
-}
-.navBtn .ico{
-  font-size:19px;
-  line-height:20px;
-}
-.navBtn.active{
-  color:#fff;
-}
-.panel{
-  height:100%;
-  overflow-y:auto;
-  padding:18px 14px 28px;
-  -webkit-overflow-scrolling:touch;
-}
-.sectionTitle{
-  margin:0 0 11px;
-  font-size:19px;
-  font-weight:800;
-}
-.sectionSub{
-  margin:-4px 0 16px;
-  color:var(--muted);
-  font-size:12px;
-}
-.card{
-  background:var(--panel);
-  border:1px solid var(--line);
-  border-radius:17px;
-  padding:14px;
-  margin-bottom:10px;
-  box-shadow:0 10px 30px rgba(0,0,0,.1);
-}
-.row{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-}
-.row + .row{
-  margin-top:12px;
-}
-.label{
-  font-size:14px;
-  font-weight:650;
-}
-.muted{
-  color:var(--muted);
-  font-size:12px;
-}
-.value{
-  color:#dfe5f0;
-  font-size:13px;
-}
-.primary{
-  width:100%;
-  min-height:45px;
-  border-radius:14px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  font-weight:750;
-  cursor:pointer;
-}
-.secondary{
-  min-height:42px;
-  padding:0 14px;
-  border-radius:13px;
-  background:rgba(255,255,255,.06);
-  border:1px solid var(--line);
-  cursor:pointer;
-}
-.danger{
-  color:#ff8a98;
-}
-.modelGrid{
-  display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:9px;
-}
-.modelCard{
-  min-width:0;
-  padding:12px;
-  border-radius:15px;
-  background:rgba(255,255,255,.04);
-  border:1px solid var(--line);
-  cursor:pointer;
-}
-.modelCard.selected{
-  border-color:rgba(94,140,255,.7);
-  background:rgba(94,140,255,.1);
-}
-.modelName{
-  font-size:13px;
-  font-weight:750;
-}
-.modelDesc{
-  margin-top:4px;
-  color:var(--muted);
-  font-size:10px;
-  line-height:1.3;
-}
-.chatList{
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-}
-.chatItem{
-  padding:13px;
-  border-radius:15px;
-  background:var(--panel);
-  border:1px solid var(--line);
-  cursor:pointer;
-}
-.chatItem.active{
-  border-color:rgba(94,140,255,.65);
-  background:rgba(94,140,255,.08);
-}
-.chatTitle{
-  font-size:14px;
-  font-weight:700;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-}
-.chatMeta{
-  margin-top:4px;
-  color:var(--muted);
-  font-size:10px;
-}
-.profileAvatar{
-  width:58px;
-  height:58px;
-  border-radius:19px;
-  display:grid;
-  place-items:center;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  font-size:24px;
-  font-weight:900;
-}
-.statsGrid{
-  display:grid;
-  grid-template-columns:repeat(2,1fr);
-  gap:9px;
-}
-.stat{
-  padding:14px;
-  border-radius:15px;
-  background:var(--panel);
-  border:1px solid var(--line);
-}
-.statValue{
-  font-size:21px;
-  font-weight:850;
-}
-.statLabel{
-  margin-top:4px;
-  color:var(--muted);
-  font-size:10px;
-}
-.sheetBackdrop{
-  position:fixed;
-  inset:0;
-  z-index:100;
-  display:none;
-  background:rgba(0,0,0,.55);
-  opacity:0;
-  transition:opacity .2s ease;
-}
-.sheetBackdrop.show{
-  display:block;
-  opacity:1;
-}
-.sheet{
-  position:absolute;
-  left:0;
-  right:0;
-  bottom:0;
-  max-height:min(86vh,760px);
-  overflow-y:auto;
-  padding:10px 14px calc(20px + env(safe-area-inset-bottom));
-  background:#15171d;
-  border-top-left-radius:24px;
-  border-top-right-radius:24px;
-  border-top:1px solid var(--line);
-  transform:translateY(100%);
-  transition:transform .25s cubic-bezier(.2,.8,.2,1);
-  box-shadow:0 -20px 60px rgba(0,0,0,.35);
-}
-.sheetBackdrop.show .sheet{
-  transform:translateY(0);
-}
-.sheetHandle{
-  width:38px;
-  height:4px;
-  margin:2px auto 14px;
-  border-radius:999px;
-  background:#505664;
-}
-.sheetTitle{
-  margin-bottom:14px;
-  font-size:18px;
-  font-weight:800;
-}
-.mediaTabs{
-  display:grid;
-  grid-template-columns:repeat(5,1fr);
-  gap:6px;
-  margin-bottom:12px;
-}
-.mediaTab{
-  min-height:37px;
-  border-radius:10px;
-  background:rgba(255,255,255,.05);
-  border:1px solid var(--line);
-  font-size:10px;
-  cursor:pointer;
-}
-.mediaTab.active{
-  background:rgba(94,140,255,.15);
-  border-color:rgba(94,140,255,.65);
-}
-.mediaModels{
-  display:grid;
-  grid-template-columns:1fr;
-  gap:8px;
-  max-height:250px;
-  overflow-y:auto;
-}
-.mediaModel{
-  padding:12px;
-  border-radius:13px;
-  background:rgba(255,255,255,.045);
-  border:1px solid var(--line);
-  cursor:pointer;
-}
-.mediaModel.selected{
-  border-color:rgba(94,140,255,.7);
-  background:rgba(94,140,255,.09);
-}
-.mediaForm{
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-.fieldLabel{
-  font-size:11px;
-  color:var(--muted);
-  margin-bottom:5px;
-}
-.field{
-  width:100%;
-  border:1px solid var(--line);
-  border-radius:13px;
-  padding:11px 12px;
-  color:var(--text);
-  background:var(--panel);
-  outline:none;
-}
-textarea.field{
-  min-height:100px;
-  resize:vertical;
-}
-.mediaStatus{
-  display:none;
-  padding:11px;
-  border-radius:13px;
-  background:rgba(255,255,255,.045);
-  color:#cbd2df;
-  font-size:12px;
-  line-height:1.4;
-}
-.mediaStatus.show{
-  display:block;
-}
-.result{
-  margin-top:12px;
-  padding:12px;
-  border-radius:14px;
-  background:rgba(85,217,138,.08);
-  border:1px solid rgba(85,217,138,.18);
-}
-.result a{
-  color:#9cc0ff;
-  text-decoration:none;
-  word-break:break-all;
-}
-.toast{
-  position:fixed;
-  left:50%;
-  bottom:calc(var(--nav-h) + 12px + env(safe-area-inset-bottom));
-  z-index:200;
-  transform:translate(-50%,20px);
-  opacity:0;
-  pointer-events:none;
-  max-width:min(90vw,430px);
-  padding:10px 14px;
-  border-radius:13px;
-  background:#252933;
-  border:1px solid var(--line);
-  box-shadow:var(--shadow);
-  font-size:12px;
-  transition:opacity .18s ease,transform .18s ease;
-}
-.toast.show{
-  opacity:1;
-  transform:translate(-50%,0);
-}
-.hidden{
-  display:none!important;
-}
-.spinner{
-  width:16px;
-  height:16px;
-  border:2px solid rgba(255,255,255,.2);
-  border-top-color:#fff;
-  border-radius:50%;
-  animation:spin .7s linear infinite;
-}
-@keyframes spin{
-  to{transform:rotate(360deg)}
-}
-.inline{
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
-@media (max-width:380px){
-  .modelGrid{grid-template-columns:1fr}
-  .mediaTabs{grid-template-columns:repeat(3,1fr)}
-  .brandSub{display:none}
-  .bubble{max-width:91%}
-}
-@media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{
-    animation-duration:.001ms!important;
-    animation-iteration-count:1!important;
-    scroll-behavior:auto!important;
-    transition-duration:.001ms!important;
-  }
-}
+:root{--bg:#0b0c0f;--panel:#121419;--panel2:#191c22;--text:#f4f6fa;--muted:#89909f;--line:rgba(255,255,255,.08);--accent:#5f8cff;--danger:#ff697b;--good:#55d98a;--nav:62px;--composer:72px;--vh:100dvh}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif}body{overflow:hidden;overscroll-behavior:none}button,input,textarea,select{font:inherit}button{border:0;color:inherit}button:disabled{opacity:.5;pointer-events:none}
+#app{height:var(--vh);min-height:100svh;overflow:hidden;position:relative}.top{height:calc(55px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 13px 0;position:fixed;inset:0 0 auto;z-index:20;display:flex;align-items:center;justify-content:space-between;background:rgba(11,12,15,.9);backdrop-filter:blur(18px);border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:9px}.logo{width:32px;height:32px;border-radius:10px;background:var(--accent);display:grid;place-items:center;font-weight:900}.brand b{font-size:15px}.brand small{display:block;color:var(--muted);font-size:10px;margin-top:1px}.topbtn{width:35px;height:35px;border-radius:11px;background:var(--panel);border:1px solid var(--line)}
+.main{position:absolute;inset:calc(55px + env(safe-area-inset-top)) 0 calc(var(--nav) + env(safe-area-inset-bottom));overflow:hidden}.screen{display:none;height:100%;overflow:auto;-webkit-overflow-scrolling:touch}.screen.active{display:block}.chat{position:relative;overflow:hidden!important}.messages{height:100%;overflow:auto;padding:16px 13px calc(var(--composer) + 18px);scroll-behavior:smooth}.msg{display:flex;margin:0 0 10px}.msg.user{justify-content:flex-end}.bubble{max-width:min(90%,680px);padding:10px 12px;border-radius:16px;background:var(--panel);border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.43;font-size:15px}.msg.user .bubble{background:#315fce;border-color:transparent;border-bottom-right-radius:5px}.msg.assistant .bubble{border-bottom-left-radius:5px}.msg.system{justify-content:center}.msg.system .bubble{background:transparent;border:0;color:var(--muted);font-size:12px;text-align:center}.welcome{position:absolute;inset:0 0 calc(var(--composer) + 15px);display:grid;place-items:center;padding:25px;text-align:center;pointer-events:none}.welcome.hide{display:none}.welcome b{display:block;font-size:27px;margin-bottom:6px}.welcome p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}.typing{display:flex;gap:4px;padding:4px}.dot{width:6px;height:6px;border-radius:50%;background:#aeb6c8;animation:blink 1s infinite}.dot:nth-child(2){animation-delay:.15s}.dot:nth-child(3){animation-delay:.3s}@keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+.composer{position:absolute;left:0;right:0;bottom:0;z-index:10;padding:6px 10px calc(7px + env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--bg) 35%);}.suggestions{display:flex;gap:6px;overflow:auto;padding:0 2px 7px;scrollbar-width:none}.suggestions::-webkit-scrollbar{display:none}.chip{flex:0 0 auto;padding:7px 9px;border-radius:11px;background:var(--panel);border:1px solid var(--line);font-size:10px}.composerRow{display:flex;gap:7px;align-items:flex-end}.round{width:40px;height:40px;flex:0 0 40px;border-radius:12px;background:var(--panel2);border:1px solid var(--line)}.send{background:var(--accent);border:0}.inputWrap{flex:1;min-width:0;border:1px solid var(--line);background:var(--panel);border-radius:15px;padding:6px 9px}.input{width:100%;min-height:27px;max-height:115px;padding:4px 0;border:0;outline:0;resize:none;overflow:auto;background:transparent;color:var(--text);line-height:20px}.filebar{display:none;align-items:center;justify-content:space-between;gap:7px;padding:6px 8px;margin-bottom:6px;background:rgba(95,140,255,.09);border-radius:10px;color:#b8c9ff;font-size:11px}.filebar.show{display:flex}.filebar span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:25;height:calc(var(--nav) + env(safe-area-inset-bottom));padding:3px 7px env(safe-area-inset-bottom);display:grid;grid-template-columns:repeat(5,1fr);background:rgba(15,16,20,.95);backdrop-filter:blur(18px);border-top:1px solid var(--line)}.nav button{background:transparent;color:var(--muted);font-size:9px;border-radius:11px}.nav button.active{color:var(--text);background:var(--panel2)}.nav i{display:block;font-style:normal;font-size:18px;margin-bottom:1px}
+.panel{padding:16px 13px 24px;max-width:760px;margin:auto}.title{font-size:23px;font-weight:800;margin:3px 0 4px}.sub{color:var(--muted);font-size:11px;margin-bottom:14px}.card,.item{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:12px;margin-bottom:8px}.item{display:flex;align-items:center;gap:10px;text-align:left;width:100%}.grow{flex:1;min-width:0}.item b{display:block;font-size:13px}.item small{display:block;color:var(--muted);font-size:10px;margin-top:3px;line-height:1.35}.arrow{color:var(--muted);font-size:19px}.primary,.secondary{width:100%;min-height:42px;border-radius:12px}.primary{background:var(--accent);font-weight:750}.secondary{background:var(--panel2);border:1px solid var(--line)}.danger{color:var(--danger)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.model{padding:10px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);text-align:left}.model.active{border-color:rgba(95,140,255,.7);background:rgba(95,140,255,.1)}.model b{font-size:11px}.model small{display:block;color:var(--muted);font-size:9px;margin-top:3px;overflow:hidden;text-overflow:ellipsis}.statgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:11px}.stat b{font-size:19px}.stat small{display:block;color:var(--muted);font-size:9px;margin-top:3px}.field{width:100%;border:1px solid var(--line);border-radius:12px;background:var(--panel2);color:var(--text);padding:10px;outline:0;margin:4px 0}.field:focus{border-color:rgba(95,140,255,.7)}textarea.field{min-height:90px;resize:vertical}.muted{color:var(--muted);font-size:11px}.empty{padding:22px;text-align:center;color:var(--muted);font-size:11px}.hidden{display:none!important}
+.sheetBack{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.58);opacity:0;visibility:hidden;pointer-events:none;transition:.16s}.sheetBack.show{opacity:1;visibility:visible;pointer-events:auto}.sheet{position:absolute;left:0;right:0;bottom:0;max-height:88%;overflow:auto;background:#15171d;border-radius:21px 21px 0 0;padding:8px 13px calc(16px + env(safe-area-inset-bottom));transform:translateY(15px);transition:transform .18s}.sheetBack.show .sheet{transform:none}.grab{width:36px;height:4px;border-radius:99px;background:#4d535f;margin:2px auto 10px}.sheetHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}.sheetHead b{font-size:17px}.close{width:32px;height:32px;border-radius:10px;background:var(--panel2)}.tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:9px}.tab{height:34px;border-radius:9px;background:var(--panel2);border:1px solid var(--line);font-size:9px}.tab.active{border-color:rgba(95,140,255,.7);background:rgba(95,140,255,.1)}.mediaModels{display:grid;gap:6px;max-height:220px;overflow:auto}.mediaModel{padding:9px;border-radius:11px;background:var(--panel2);border:1px solid var(--line);text-align:left}.mediaModel.active{border-color:rgba(95,140,255,.7)}.status{padding:9px;border-radius:11px;background:var(--panel2);font-size:11px;color:var(--muted)}.result{padding:10px;border-radius:11px;background:rgba(85,217,138,.08);border:1px solid rgba(85,217,138,.18);font-size:11px}.result a{color:#a8c4ff;word-break:break-all}.toast{position:fixed;left:50%;bottom:calc(var(--nav) + 10px + env(safe-area-inset-bottom));transform:translate(-50%,15px);opacity:0;pointer-events:none;z-index:150;padding:9px 12px;border-radius:11px;background:#252933;border:1px solid var(--line);font-size:11px;transition:.16s;max-width:90vw}.toast.show{opacity:1;transform:translate(-50%,0)}
+@media(max-width:380px){.grid{grid-template-columns:1fr}.bubble{max-width:92%}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 </style>
 </head>
 <body>
-<div class="app" id="app">
-  <header class="topbar">
-    <div class="brand">
-      <div class="logo">B</div>
-      <div class="brandText">
-        <div class="brandTitle">Bulba AI</div>
-        <div class="brandSub" id="headerSub">V17.2 • запуск…</div>
-      </div>
+<div id="app">
+<header class="top">
+  <div class="brand">
+    <div class="logo">B</div>
+    <div><b>Bulba AI</b><small id="online">Подключение…</small></div>
+  </div>
+  <button class="topbtn" id="newChat" type="button">＋</button>
+</header>
+
+<main class="main">
+<section class="screen chat active" id="chatScreen">
+  <div class="messages" id="messages"></div>
+  <div class="welcome" id="welcome">
+    <div>
+      <b>Чем займёмся?</b>
+      <p>Текст, файлы и Media Studio — без лишних экранов.</p>
     </div>
-    <div class="headerActions">
-      <button class="iconBtn" id="newChatBtn" type="button" aria-label="Новый чат">＋</button>
+  </div>
+
+  <div class="composer">
+    <div class="suggestions">
+      <button class="chip" data-p="Объясни мне эту тему простыми словами">Объясни</button>
+      <button class="chip" data-p="Реши задачу и объясни решение">Реши</button>
+      <button class="chip" data-p="Сделай краткий конспект">Конспект</button>
     </div>
-  </header>
 
-  <main class="content">
-    <section class="screen active chatScreen" id="screen-chat">
-      <div class="messages" id="messages"></div>
+    <div class="filebar" id="filebar">
+      <span id="filename"></span>
+      <button class="close" id="removeFile">×</button>
+    </div>
 
-      <div class="empty" id="emptyState">
-        <div class="emptyInner">
-          <div class="emptyLogo">B</div>
-          <h2>Чем займёмся?</h2>
-          <p>Задай вопрос, отправь файл или открой Media Studio для генерации контента.</p>
-        </div>
+    <div class="composerRow">
+      <button class="round" id="attach">📎</button>
+      <div class="inputWrap">
+        <textarea class="input" id="input" rows="1" placeholder="Сообщение…"></textarea>
       </div>
+      <button class="round send" id="send">➤</button>
+    </div>
 
-      <div class="composer">
-        <div class="suggestions" id="suggestions">
-          <button class="suggestion" type="button" data-prompt="Объясни мне эту тему простыми словами">Объясни тему</button>
-          <button class="suggestion" type="button" data-prompt="Помоги решить задачу и объясни решение">Решить задачу</button>
-          <button class="suggestion" type="button" data-prompt="Сделай краткий конспект этой темы">Конспект</button>
-          <button class="suggestion" type="button" data-prompt="Дай мне интересный факт">Интересный факт</button>
-        </div>
+    <input id="file" type="file" hidden>
+  </div>
+</section>
 
-        <div class="filePreview" id="filePreview">
-          <span class="filePreviewName" id="filePreviewName"></span>
-          <button class="secondary" id="removeFileBtn" type="button">×</button>
-        </div>
+<section class="screen" id="chatsScreen">
+  <div class="panel">
+    <div class="title">Чаты</div>
+    <div class="sub">Все твои диалоги</div>
+    <div id="chatList"></div>
+  </div>
+</section>
 
-        <div class="composerRow">
-          <button class="attachBtn" id="attachBtn" type="button" aria-label="Файл">📎</button>
-          <div class="inputWrap">
-            <textarea id="input" rows="1" placeholder="Сообщение…"></textarea>
-          </div>
-          <button class="sendBtn" id="sendBtn" type="button" aria-label="Отправить">➤</button>
-        </div>
-        <input id="fileInput" type="file" hidden>
-      </div>
-    </section>
+<section class="screen" id="mediaScreen">
+  <div class="panel">
+    <div class="title">Media Studio</div>
+    <div class="sub">Генерация изображений, видео, TTS, музыки и 3D через доступные модели.</div>
+    <button class="primary" id="openMedia">Открыть Media Studio</button>
+  </div>
+</section>
 
-    <section class="screen" id="screen-chats">
-      <div class="panel">
-        <h2 class="sectionTitle">Чаты</h2>
-        <p class="sectionSub">Твои сохранённые диалоги</p>
-        <div class="chatList" id="chatList"></div>
-      </div>
-    </section>
+<section class="screen" id="settingsScreen">
+  <div class="panel">
+    <div class="title">Настройки</div>
+    <div class="sub">Модель и стиль ответа</div>
 
-    <section class="screen" id="screen-media">
-      <div class="panel">
-        <h2 class="sectionTitle">Media Studio</h2>
-        <p class="sectionSub">Генерация изображений, видео, музыки, TTS и других доступных медиа.</p>
+    <div class="card">
+      <b style="font-size:13px">Модель</b>
+      <div class="grid" id="models" style="margin-top:8px"></div>
+    </div>
 
-        <div class="card">
-          <button class="primary" id="openMediaBtn" type="button">Открыть Media Studio</button>
-        </div>
+    <div class="card">
+      <b style="font-size:13px">Стиль</b>
+      <select class="field" id="style">
+        <option value="balanced">Сбалансированный</option>
+        <option value="short">Короткий</option>
+        <option value="detailed">Подробный</option>
+        <option value="friendly">Дружелюбный</option>
+        <option value="strict">Строгий</option>
+      </select>
+    </div>
 
-        <div class="card">
-          <div class="row">
-            <div>
-              <div class="label">Статус</div>
-              <div class="muted">Последние операции Media Studio</div>
-            </div>
-            <div class="value" id="mediaHomeStatus">Готово</div>
-          </div>
-        </div>
+    <button class="primary" id="saveSettings">Сохранить</button>
+  </div>
+</section>
 
-        <div id="mediaHistory"></div>
-      </div>
-    </section>
+<section class="screen" id="profileScreen">
+  <div class="panel">
+    <div class="title">Профиль</div>
+    <div class="sub" id="profileSub">Загрузка…</div>
 
-    <section class="screen" id="screen-settings">
-      <div class="panel">
-        <h2 class="sectionTitle">Настройки</h2>
-        <p class="sectionSub">Персонализация Bulba AI</p>
+    <div class="statgrid" id="stats"></div>
 
-        <div class="card">
-          <div class="row">
-            <div>
-              <div class="label">Модель</div>
-              <div class="muted">Модель для обычного чата</div>
-            </div>
-            <div class="value" id="currentModel">—</div>
-          </div>
-        </div>
+    <div class="card" style="margin-top:8px">
+      <button class="item" id="memory">
+        <div class="grow"><b>Память</b><small>Что Bulba AI запомнил о тебе</small></div>
+        <span class="arrow">›</span>
+      </button>
 
-        <div class="card">
-          <div class="label">Доступные модели</div>
-          <div class="muted" style="margin:5px 0 11px">Выбери модель для новых запросов</div>
-          <div class="modelGrid" id="modelGrid"></div>
-        </div>
+      <button class="item" id="favoritesBtn">
+        <div class="grow"><b>Избранное</b><small>Сохранённые ответы</small></div>
+        <span class="arrow">›</span>
+      </button>
 
-        <div class="card">
-          <div class="row">
-            <div>
-              <div class="label">Память</div>
-              <div class="muted">Сохранённые сведения о тебе</div>
-            </div>
-            <button class="secondary" id="memoryBtn" type="button">Открыть</button>
-          </div>
-        </div>
+      <button class="item" id="activate">
+        <div class="grow"><b>Активировать лицензию</b><small>Введи код доступа</small></div>
+        <span class="arrow">›</span>
+      </button>
 
-        <div class="card">
-          <button class="secondary" id="clearChatBtn" type="button" style="width:100%">Очистить текущий чат</button>
-        </div>
-      </div>
-    </section>
+      <button class="item" id="clearChat">
+        <div class="grow"><b>Очистить чат</b><small>Удалить сообщения текущего диалога</small></div>
+        <span class="arrow">›</span>
+      </button>
+    </div>
 
-    <section class="screen" id="screen-profile">
-      <div class="panel">
-        <h2 class="sectionTitle">Профиль</h2>
+    <div id="adminPanel"></div>
+  </div>
+</section>
+</main>
 
-        <div class="card">
-          <div class="row">
-            <div class="inline">
-              <div class="profileAvatar" id="profileAvatar">B</div>
-              <div>
-                <div class="label" id="profileName">Пользователь</div>
-                <div class="muted" id="profileId">ID: —</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="statsGrid">
-          <div class="stat">
-            <div class="statValue" id="statRequests">0</div>
-            <div class="statLabel">Запросов</div>
-          </div>
-          <div class="stat">
-            <div class="statValue" id="statFavorites">0</div>
-            <div class="statLabel">Избранных</div>
-          </div>
-          <div class="stat">
-            <div class="statValue" id="statChats">0</div>
-            <div class="statLabel">Чатов</div>
-          </div>
-          <div class="stat">
-            <div class="statValue" id="statLicense">—</div>
-            <div class="statLabel">Лицензия</div>
-          </div>
-        </div>
-
-        <div class="card" style="margin-top:10px">
-          <div class="label">Активация лицензии</div>
-          <div class="muted" style="margin:5px 0 10px">Введи код, если он у тебя есть.</div>
-          <input class="field" id="licenseInput" placeholder="Код лицензии">
-          <button class="primary" id="activateBtn" type="button" style="margin-top:8px">Активировать</button>
-        </div>
-
-        <div class="card hidden" id="adminCard">
-          <div class="label">Админ-панель</div>
-          <div class="muted" style="margin:5px 0 11px">Управление правилами и лицензиями</div>
-          <button class="secondary" id="adminRulesBtn" type="button" style="width:100%">Правила</button>
-          <button class="secondary" id="adminStatsBtn" type="button" style="width:100%;margin-top:8px">Статистика</button>
-          <button class="secondary" id="adminLicenseBtn" type="button" style="width:100%;margin-top:8px">Лицензии</button>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <nav class="nav">
-    <button class="navBtn active" type="button" data-screen="chat">
-      <span class="ico">💬</span>
-      <span>Чат</span>
-    </button>
-    <button class="navBtn" type="button" data-screen="chats">
-      <span class="ico">🗂️</span>
-      <span>Чаты</span>
-    </button>
-    <button class="navBtn" type="button" data-screen="media">
-      <span class="ico">✨</span>
-      <span>Media</span>
-    </button>
-    <button class="navBtn" type="button" data-screen="settings">
-      <span class="ico">⚙️</span>
-      <span>Настройки</span>
-    </button>
-    <button class="navBtn" type="button" data-screen="profile">
-      <span class="ico">👤</span>
-      <span>Профиль</span>
-    </button>
-  </nav>
+<nav class="nav">
+  <button class="active" data-screen="chatScreen"><i>💬</i>Чат</button>
+  <button data-screen="chatsScreen"><i>🗂</i>Чаты</button>
+  <button data-screen="mediaScreen"><i>✨</i>Медиа</button>
+  <button data-screen="settingsScreen"><i>⚙️</i>Настройки</button>
+  <button data-screen="profileScreen"><i>👤</i>Профиль</button>
+</nav>
 </div>
 
-<div class="sheetBackdrop" id="sheetBackdrop">
-  <div class="sheet" id="sheet">
-    <div class="sheetHandle"></div>
-    <div class="sheetTitle" id="sheetTitle">Media Studio</div>
-
-    <div id="mediaStudio">
-      <div class="mediaTabs" id="mediaTabs">
-        <button class="mediaTab active" type="button" data-kind="image">Фото</button>
-        <button class="mediaTab" type="button" data-kind="video">Видео</button>
-        <button class="mediaTab" type="button" data-kind="tts">TTS</button>
-        <button class="mediaTab" type="button" data-kind="music">Музыка</button>
-        <button class="mediaTab" type="button" data-kind="3d">3D</button>
-      </div>
-
-      <div class="mediaModels" id="mediaModels"></div>
-
-      <div class="mediaForm" style="margin-top:12px">
-        <div>
-          <div class="fieldLabel">Промпт</div>
-          <textarea class="field" id="mediaPrompt" placeholder="Опиши, что нужно создать…"></textarea>
-        </div>
-
-        <div id="mediaExtraFields"></div>
-
-        <button class="primary" id="generateMediaBtn" type="button">Сгенерировать</button>
-
-        <div class="mediaStatus" id="mediaStatus"></div>
-        <div id="mediaResult"></div>
-      </div>
+<div class="sheetBack" id="sheetBack">
+  <div class="sheet">
+    <div class="grab"></div>
+    <div class="sheetHead">
+      <b id="sheetTitle"></b>
+      <button class="close" id="close">×</button>
     </div>
-
-    <div id="memoryStudio" class="hidden">
-      <div class="card">
-        <div class="fieldLabel">Память</div>
-        <textarea class="field" id="memoryText" placeholder="Здесь будут сохранённые сведения…"></textarea>
-        <button class="primary" id="saveMemoryBtn" type="button" style="margin-top:9px">Сохранить</button>
-      </div>
-    </div>
-
-    <div id="adminStudio" class="hidden"></div>
+    <div id="sheetBody"></div>
   </div>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
-(() => {
-"use strict";
+(()=>{
+'use strict';
 
-const tg = window.Telegram?.WebApp || null;
-
+const tg=window.Telegram?.WebApp;
 if(tg){
-  try{
-    tg.ready();
-    tg.expand();
-    tg.enableClosingConfirmation?.();
-  }catch(e){}
+  tg.ready();
+  tg.expand();
+  try{tg.setHeaderColor('#0b0c0f')}catch{}
+  try{tg.setBackgroundColor('#0b0c0f')}catch{}
 }
 
-const $ = id => document.getElementById(id);
+const $=id=>document.getElementById(id);
 
-const state = {
-  user:null,
-  chats:[],
-  messages:[],
-  models:[],
+const state={
+  data:null,
   selectedModel:null,
-  selectedChat:null,
-  selectedFile:null,
-  mediaKind:"image",
+  mediaKind:'image',
   mediaModels:[],
-  selectedMediaModel:null,
+  mediaModel:null,
+  file:null,
   sending:false,
-  generating:false,
-  pollTimer:null,
-  lastState:null
+  generating:false
 };
 
-const api = async (url, options={}) => {
-  const headers = new Headers(options.headers || {});
-  headers.set("Content-Type","application/json");
+function haptic(type='light'){
+  try{tg?.HapticFeedback?.impactOccurred(type)}catch{}
+}
 
-  const init = {
-    ...options,
-    headers
+function toast(text){
+  const el=$('toast');
+  el.textContent=text;
+  el.classList.add('show');
+  clearTimeout(toast.t);
+  toast.t=setTimeout(()=>el.classList.remove('show'),2200);
+}
+
+function esc(v){
+  return String(v??'')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
+}
+
+function setViewport(){
+  const vv=window.visualViewport;
+  const h=vv?.height||window.innerHeight;
+  document.documentElement.style.setProperty('--vh',`${h}px`);
+}
+
+window.addEventListener('resize',setViewport,{passive:true});
+window.visualViewport?.addEventListener('resize',setViewport,{passive:true});
+setViewport();
+
+async function api(url,opts={}){
+  const headers={
+    'Content-Type':'application/json',
+    ...(opts.headers||{})
   };
 
-  if(tg?.initDataUnsafe?.user){
-    headers.set("X-Telegram-User", JSON.stringify(tg.initDataUnsafe.user));
+  if(tg?.initData){
+    headers['X-Telegram-Init-Data']=tg.initData;
   }
 
-  let response;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),opts.timeout||25000);
 
   try{
-    response = await fetch(url, init);
-  }catch(error){
-    throw new Error("Нет соединения с сервером");
-  }
+    const res=await fetch(url,{
+      ...opts,
+      headers,
+      signal:controller.signal
+    });
 
-  let data = null;
+    const text=await res.text();
+    let data={};
 
-  try{
-    data = await response.json();
+    try{
+      data=text?JSON.parse(text):{};
+    }catch{
+      data={message:text};
+    }
+
+    if(!res.ok){
+      throw new Error(data.error||data.message||`HTTP ${res.status}`);
+    }
+
+    return data;
   }catch(e){
-    data = null;
+    if(e.name==='AbortError')throw new Error('Сервер не отвечает');
+    throw e;
+  }finally{
+    clearTimeout(timeout);
   }
-
-  if(!response.ok){
-    const message = data?.message || data?.error || `Ошибка сервера (${response.status})`;
-    throw new Error(message);
-  }
-
-  return data;
-};
-
-function haptic(type="light"){
-  try{
-    tg?.HapticFeedback?.impactOccurred?.(type);
-  }catch(e){}
-}
-
-let toastTimer = null;
-
-function toast(message){
-  const el = $("toast");
-  if(!el)return;
-
-  el.textContent = message;
-  el.classList.add("show");
-
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    el.classList.remove("show");
-  },2600);
-}
-
-function escapeHtml(value){
-  return String(value ?? "")
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
-}
-
-function formatMessage(text){
-  return escapeHtml(text);
-}
-
-function setLoading(button, loading, text){
-  if(!button)return;
-
-  if(loading){
-    button.dataset.oldText = button.innerHTML;
-    button.innerHTML = `<span class="inline" style="justify-content:center"><span class="spinner"></span>${escapeHtml(text || "Загрузка…")}</span>`;
-    button.disabled = true;
-  }else{
-    button.innerHTML = button.dataset.oldText || "Готово";
-    button.disabled = false;
-  }
-}
-
-function showScreen(name){
-  document.querySelectorAll(".screen").forEach(screen => {
-    screen.classList.toggle("active", screen.id === `screen-${name}`);
-  });
-
-  document.querySelectorAll(".navBtn").forEach(button => {
-    button.classList.toggle("active", button.dataset.screen === name);
-  });
-
-  if(name === "chats")loadChats();
-  if(name === "settings")loadModels();
-  if(name === "profile")loadState();
-  if(name === "media")loadMediaModels(state.mediaKind);
-
-  haptic("light");
 }
 
 function renderMessages(){
-  const container = $("messages");
-  const empty = $("emptyState");
+  const box=$('messages');
+  const messages=state.data?.messages||[];
 
-  container.innerHTML = "";
+  box.innerHTML='';
 
-  if(!state.messages.length){
-    empty.style.display = "flex";
+  if(!messages.length){
+    $('welcome').classList.remove('hide');
     return;
   }
 
-  empty.style.display = "none";
+  $('welcome').classList.add('hide');
 
-  const fragment = document.createDocumentFragment();
+  const frag=document.createDocumentFragment();
 
-  state.messages.forEach(message => {
-    const row = document.createElement("div");
+  messages.forEach(m=>{
+    const row=document.createElement('div');
+    const role=m.role||'assistant';
 
-    const role = message.role === "user" ? "user" :
-                 message.role === "assistant" ? "assistant" : "system";
+    row.className=`msg ${role}`;
 
-    row.className = `message ${role}`;
-
-    const bubble = document.createElement("div");
-    bubble.className = "bubble";
-    bubble.innerHTML = formatMessage(message.content || "");
+    const bubble=document.createElement('div');
+    bubble.className='bubble';
+    bubble.textContent=m.content||m.text||'';
 
     row.appendChild(bubble);
-    fragment.appendChild(row);
+    frag.appendChild(row);
   });
 
-  container.appendChild(fragment);
+  box.appendChild(frag);
 
-  requestAnimationFrame(() => {
-    container.scrollTop = container.scrollHeight;
+  requestAnimationFrame(()=>{
+    box.scrollTop=box.scrollHeight;
   });
 }
 
-function addMessage(role, content){
-  state.messages.push({
-    role,
-    content
+function renderChats(chats){
+  const box=$('chatList');
+  box.innerHTML='';
+
+  if(!chats.length){
+    box.innerHTML='<div class="empty">Чатов пока нет.</div>';
+    return;
+  }
+
+  const frag=document.createDocumentFragment();
+
+  chats.forEach(c=>{
+    const b=document.createElement('button');
+    b.className='item';
+
+    b.innerHTML=`
+      <div class="grow">
+        <b>${esc(c.title||'Новый чат')}</b>
+        <small>${esc(c.preview||'Нет сообщений')}</small>
+      </div>
+      <span class="arrow">›</span>
+    `;
+
+    b.onclick=()=>selectChat(c.id);
+    frag.appendChild(b);
   });
 
-  renderMessages();
+  box.appendChild(frag);
 }
 
-function addTyping(){
-  const container = $("messages");
+function renderModels(models){
+  const box=$('models');
+  box.innerHTML='';
 
-  const row = document.createElement("div");
-  row.className = "message assistant";
-  row.id = "typingMessage";
+  if(!models?.length){
+    box.innerHTML='<div class="empty">Модели недоступны.</div>';
+    return;
+  }
 
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
+  models.forEach(m=>{
+    const b=document.createElement('button');
 
-  bubble.innerHTML = `
-    <div class="typing">
-      <span class="dot"></span>
-      <span class="dot"></span>
-      <span class="dot"></span>
-    </div>
-  `;
+    b.className='model';
+    if(m.id===state.selectedModel)b.classList.add('active');
 
-  row.appendChild(bubble);
-  container.appendChild(row);
+    b.innerHTML=`
+      <b>${esc(m.name||m.id)}</b>
+      <small>${esc(m.description||m.id)}</small>
+    `;
 
-  container.scrollTop = container.scrollHeight;
-}
+    b.onclick=()=>{
+      state.selectedModel=m.id;
+      renderModels(models);
+      haptic('light');
+    };
 
-function removeTyping(){
-  $("typingMessage")?.remove();
-}
-
-function autoResizeInput(){
-  const input = $("input");
-
-  input.style.height = "auto";
-
-  const height = Math.min(
-    Math.max(input.scrollHeight,28),
-    120
-  );
-
-  input.style.height = `${height}px`;
-}
-
-function selectModel(model){
-  state.selectedModel = model;
-
-  document.querySelectorAll(".modelCard").forEach(card => {
-    card.classList.toggle(
-      "selected",
-      card.dataset.model === String(model?.id || model?.name || "")
-    );
+    box.appendChild(b);
   });
-
-  $("currentModel").textContent =
-    model?.name ||
-    model?.id ||
-    "—";
-
-  try{
-    localStorage.setItem(
-      "bulba_selected_model",
-      model?.id || model?.name || ""
-    );
-  }catch(e){}
-
-  haptic("light");
 }
 
 async function loadModels(){
   try{
-    const data = await api("/api/models");
+    const d=await api('/api/models');
 
-    state.models = Array.isArray(data?.models)
-      ? data.models
-      : Array.isArray(data)
-        ? data
-        : [];
+    const models=d.models||[];
 
-    const grid = $("modelGrid");
-    grid.innerHTML = "";
-
-    if(!state.models.length){
-      grid.innerHTML = `<div class="muted">Модели пока недоступны.</div>`;
-      return;
+    if(!state.selectedModel){
+      state.selectedModel=d.selected_model||state.data?.model||models[0]?.id||'auto';
     }
 
-    let saved = null;
+    renderModels(models);
 
-    try{
-      saved = localStorage.getItem("bulba_selected_model");
-    }catch(e){}
-
-    const fragment = document.createDocumentFragment();
-
-    state.models.forEach(model => {
-      const id = String(model.id || model.name || "");
-      const card = document.createElement("button");
-
-      card.type = "button";
-      card.className = "modelCard";
-      card.dataset.model = id;
-
-      card.innerHTML = `
-        <div class="modelName">${escapeHtml(model.name || id)}</div>
-        <div class="modelDesc">${escapeHtml(model.description || model.desc || "")}</div>
-      `;
-
-      card.addEventListener("click", () => {
-        selectModel(model);
-      });
-
-      fragment.appendChild(card);
-    });
-
-    grid.appendChild(fragment);
-
-    const chosen =
-      state.models.find(model =>
-        String(model.id || model.name || "") === saved
-      ) || state.models[0];
-
-    selectModel(chosen);
-  }catch(error){
-    $("modelGrid").innerHTML =
-      `<div class="muted">${escapeHtml(error.message)}</div>`;
+    if(state.data?.style){
+      $('style').value=state.data.style;
+    }
+  }catch(e){
+    $('models').innerHTML=`<div class="status">${esc(e.message)}</div>`;
   }
 }
 
-async function loadChats(){
-  try{
-    const data = await api("/api/state");
+function renderProfile(){
+  const d=state.data||{};
+  const user=d.user||{};
 
-    state.chats =
-      Array.isArray(data?.chats)
-        ? data.chats
-        : [];
+  $('profileSub').textContent=
+    user.username?`@${user.username}`:
+    user.first_name||`ID ${user.id||''}`;
 
-    renderChats();
-  }catch(error){
-    $("chatList").innerHTML =
-      `<div class="muted">${escapeHtml(error.message)}</div>`;
-  }
-}
+  const s=d.stats||{};
 
-function renderChats(){
-  const container = $("chatList");
-  container.innerHTML = "";
+  $('stats').innerHTML=`
+    <div class="stat"><b>${esc(s.requests??d.requests_left??0)}</b><small>Запросов</small></div>
+    <div class="stat"><b>${esc(s.chats??d.chats?.length??0)}</b><small>Чатов</small></div>
+    <div class="stat"><b>${esc(s.favorites??d.favorites?.length??0)}</b><small>Избранных</small></div>
+    <div class="stat"><b>${esc(s.memory??Object.keys(d.memory||{}).length)}</b><small>Записей памяти</small></div>
+  `;
 
-  if(!state.chats.length){
-    container.innerHTML =
-      `<div class="card"><div class="muted">Чатов пока нет.</div></div>`;
-    return;
-  }
+  const admin=d.admin;
 
-  const fragment = document.createDocumentFragment();
-
-  state.chats.forEach(chat => {
-    const button = document.createElement("button");
-
-    button.type = "button";
-    button.className =
-      `chatItem ${String(chat.id) === String(state.selectedChat) ? "active" : ""}`;
-
-    button.innerHTML = `
-      <div class="chatTitle">${escapeHtml(chat.title || "Новый чат")}</div>
-      <div class="chatMeta">${escapeHtml(chat.updated_at || chat.date || "")}</div>
+  if(admin){
+    $('adminPanel').innerHTML=`
+      <div class="card">
+        <b style="font-size:13px">Админ</b>
+        <button class="item" id="rules">
+          <div class="grow"><b>Правила</b><small>Автоматические ответы</small></div>
+          <span class="arrow">›</span>
+        </button>
+        <button class="item" id="adminStats">
+          <div class="grow"><b>Статистика</b><small>Общая статистика бота</small></div>
+          <span class="arrow">›</span>
+        </button>
+        <button class="item" id="adminLicense">
+          <div class="grow"><b>Выдать лицензию</b><small>Создать код пользователю</small></div>
+          <span class="arrow">›</span>
+        </button>
+      </div>
     `;
 
-    button.addEventListener("click", async () => {
-      await selectChat(chat.id);
-    });
-
-    fragment.appendChild(button);
-  });
-
-  container.appendChild(fragment);
+    $('rules').onclick=()=>adminAction('rules');
+    $('adminStats').onclick=()=>adminAction('stats');
+    $('adminLicense').onclick=()=>adminAction('license');
+  }else{
+    $('adminPanel').innerHTML='';
+  }
 }
 
-async function selectChat(chatId){
+async function refresh(){
   try{
-    const data = await api("/api/chat/select",{
-      method:"POST",
-      body:JSON.stringify({
-        chat_id:chatId
-      })
-    });
+    const d=await api('/api/state');
 
-    state.selectedChat = chatId;
+    state.data=d.state||d;
 
-    if(Array.isArray(data?.messages)){
-      state.messages = data.messages.map(item => ({
-        role:item.role,
-        content:item.content || item.text || ""
-      }));
-    }else{
-      state.messages = [];
-    }
+    $('online').textContent='Онлайн';
 
     renderMessages();
-    showScreen("chat");
-  }catch(error){
-    toast(error.message);
+
+    if(document.getElementById('chatsScreen').classList.contains('active')){
+      renderChats(state.data.chats||[]);
+    }
+
+    if(document.getElementById('profileScreen').classList.contains('active')){
+      renderProfile();
+    }
+
+    if(document.getElementById('settingsScreen').classList.contains('active')){
+      loadModels();
+    }
+
+    if(!state.selectedModel){
+      state.selectedModel=state.data.model||'auto';
+    }
+  }catch(e){
+    $('online').textContent='Нет соединения';
+    toast(e.message);
   }
 }
 
-async function createNewChat(){
-  if(state.sending)return;
+function resize(){
+  const input=$('input');
 
-  try{
-    const data = await api("/api/chat/new",{
-      method:"POST",
-      body:JSON.stringify({})
-    });
-
-    state.selectedChat = data?.chat_id || null;
-    state.messages = [];
-
-    renderMessages();
-    showScreen("chat");
-    toast("Новый чат создан");
-  }catch(error){
-    toast(error.message);
-  }
-}
-
-async function sendMessage(){
-  if(state.sending)return;
-
-  const input = $("input");
-  const text = input.value.trim();
-
-  if(!text && !state.selectedFile){
-    return;
-  }
-
-  state.sending = true;
-  $("sendBtn").disabled = true;
-
-  const file = state.selectedFile;
-
-  input.value = "";
-  autoResizeInput();
-
-  if(text){
-    addMessage("user",text);
-  }
-
-  if(file){
-    addMessage("user",`📎 ${file.name}`);
-  }
-
-  removeFile();
-
-  addTyping();
-
-  try{
-    let response;
-
-    if(file){
-      const form = new FormData();
-
-      form.append("message",text);
-      form.append("file",file);
-
-      if(state.selectedModel){
-        form.append(
-          "model",
-          state.selectedModel.id || state.selectedModel.name || ""
-        );
-      }
-
-      response = await fetch("/api/chat",{
-        method:"POST",
-        body:form,
-        headers:tg?.initDataUnsafe?.user
-          ? {
-              "X-Telegram-User":
-                JSON.stringify(tg.initDataUnsafe.user)
-            }
-          : {}
-      });
-
-      let data;
-
-      try{
-        data = await response.json();
-      }catch(e){
-        data = null;
-      }
-
-      if(!response.ok){
-        throw new Error(
-          data?.message ||
-          data?.error ||
-          `Ошибка сервера (${response.status})`
-        );
-      }
-
-      response = data;
-    }else{
-      response = await api("/api/chat",{
-        method:"POST",
-        body:JSON.stringify({
-          message:text,
-          model:
-            state.selectedModel?.id ||
-            state.selectedModel?.name ||
-            null,
-          chat_id:state.selectedChat
-        })
-      });
-    }
-
-    removeTyping();
-
-    const answer =
-      response?.answer ||
-      response?.response ||
-      response?.message ||
-      response?.text ||
-      "";
-
-    if(answer){
-      addMessage("assistant",answer);
-    }else{
-      addMessage("system","Ответ получен, но текст отсутствует.");
-    }
-
-    if(response?.chat_id){
-      state.selectedChat = response.chat_id;
-    }
-
-    haptic("light");
-  }catch(error){
-    removeTyping();
-    addMessage("system",`Ошибка: ${error.message}`);
-    toast(error.message);
-    haptic("heavy");
-  }finally{
-    state.sending = false;
-    $("sendBtn").disabled = false;
-    input.focus();
-  }
+  input.style.height='auto';
+  input.style.height=Math.min(input.scrollHeight,115)+'px';
 }
 
 function removeFile(){
-  state.selectedFile = null;
-  $("fileInput").value = "";
-  $("filePreview").classList.remove("show");
-  $("filePreviewName").textContent = "";
+  state.file=null;
+  $('file').value='';
+  $('filename').textContent='';
+  $('filebar').classList.remove('show');
 }
 
-function openSheet(title="Media Studio"){
-  $("sheetTitle").textContent = title;
-  $("sheetBackdrop").classList.add("show");
-  document.body.style.overflow = "hidden";
+function fileToDataURL(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+
+    reader.onload=()=>resolve(reader.result);
+    reader.onerror=()=>reject(new Error('Не удалось прочитать файл'));
+
+    reader.readAsDataURL(file);
+  });
+}
+
+async function send(){
+  if(state.sending)return;
+
+  const text=$('input').value.trim();
+
+  if(!text&&!state.file)return;
+
+  state.sending=true;
+  $('send').disabled=true;
+
+  const payload={text};
+
+  try{
+    if(state.file){
+      if(state.file.size>15*1024*1024){
+        throw new Error('Файл слишком большой');
+      }
+
+      payload.file_name=state.file.name;
+      payload.file_data=await fileToDataURL(state.file);
+    }
+
+    $('input').value='';
+    resize();
+
+    const typing=document.createElement('div');
+    typing.className='msg assistant';
+    typing.id='typing';
+
+    typing.innerHTML=`
+      <div class="bubble">
+        <div class="typing">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+      </div>
+    `;
+
+    $('messages').appendChild(typing);
+    $('messages').scrollTop=$('messages').scrollHeight;
+
+    removeFile();
+
+    await api('/api/chat',{
+      method:'POST',
+      body:JSON.stringify(payload),
+      timeout:60000
+    });
+
+    $('typing')?.remove();
+
+    await refresh();
+
+    haptic('light');
+  }catch(e){
+    $('typing')?.remove();
+    toast(e.message);
+  }finally{
+    state.sending=false;
+    $('send').disabled=false;
+  }
+}
+
+async function selectChat(id){
+  if(state.sending)return;
+
+  try{
+    await api('/api/chat/select',{
+      method:'POST',
+      body:JSON.stringify({chat_id:id})
+    });
+
+    await refresh();
+    screen('chatScreen');
+  }catch(e){
+    toast(e.message);
+  }
+}
+
+async function newChat(){
+  if(state.sending)return;
+
+  try{
+    await api('/api/chat/new',{
+      method:'POST',
+      body:'{}'
+    });
+
+    await refresh();
+    screen('chatScreen');
+  }catch(e){
+    toast(e.message);
+  }
+}
+
+async function clearChat(){
+  try{
+    await api('/api/chat/clear',{
+      method:'POST',
+      body:JSON.stringify({
+        chat_id:state.data?.active_chat||'main'
+      })
+    });
+
+    await refresh();
+    toast('Чат очищен');
+  }catch(e){
+    toast(e.message);
+  }
+}
+
+function screen(id){
+  document.querySelectorAll('.screen')
+    .forEach(x=>x.classList.toggle('active',x.id===id));
+
+  document.querySelectorAll('.nav button')
+    .forEach(x=>x.classList.toggle('active',x.dataset.screen===id));
+
+  if(id==='chatsScreen'){
+    renderChats(state.data?.chats||[]);
+  }
+
+  if(id==='settingsScreen'){
+    loadModels();
+  }
+
+  if(id==='profileScreen'){
+    refresh();
+  }
+
+  haptic('light');
+}
+
+function openSheet(title,html){
+  $('sheetTitle').textContent=title;
+  $('sheetBody').innerHTML=html;
+  $('sheetBack').classList.add('show');
 }
 
 function closeSheet(){
-  $("sheetBackdrop").classList.remove("show");
-  document.body.style.overflow = "";
+  $('sheetBack').classList.remove('show');
 }
 
-async function loadMediaModels(kind){
-  try{
-    const data = await api(
-      `/api/media/models?kind=${encodeURIComponent(kind)}`
-    );
+async function openMemory(){
+  const mem=state.data?.memory||{};
+  let h='<div class="card">';
 
-    state.mediaModels =
-      Array.isArray(data?.models)
-        ? data.models
-        : Array.isArray(data)
-          ? data
-          : [];
+  const keys=Object.keys(mem);
+
+  if(!keys.length){
+    h+='<div class="empty">Память пуста.</div>';
+  }else{
+    keys.forEach(k=>{
+      h+=`
+        <div class="item">
+          <div class="grow">
+            <b>${esc(k)}</b>
+            <small>${esc(mem[k])}</small>
+          </div>
+          <button class="close" data-delmem="${esc(k)}">×</button>
+        </div>
+      `;
+    });
+  }
+
+  h+=`
+    </div>
+    <input class="field" id="memKey" placeholder="Ключ">
+    <input class="field" id="memValue" placeholder="Значение">
+    <button class="primary" id="memSave">Сохранить</button>
+    <button class="secondary" id="memClear" style="margin-top:6px">Очистить память</button>
+  `;
+
+  openSheet('Память',h);
+
+  document.querySelectorAll('[data-delmem]').forEach(b=>{
+    b.onclick=async()=>{
+      try{
+        await api('/api/memory',{
+          method:'POST',
+          body:JSON.stringify({
+            action:'delete',
+            key:b.dataset.delmem
+          })
+        });
+
+        await refresh();
+        openMemory();
+      }catch(e){
+        toast(e.message);
+      }
+    };
+  });
+
+  $('memSave').onclick=async()=>{
+    try{
+      await api('/api/memory',{
+        method:'POST',
+        body:JSON.stringify({
+          action:'set',
+          key:$('memKey').value,
+          value:$('memValue').value
+        })
+      });
+
+      await refresh();
+      openMemory();
+    }catch(e){
+      toast(e.message);
+    }
+  };
+
+  $('memClear').onclick=async()=>{
+    try{
+      await api('/api/memory',{
+        method:'POST',
+        body:JSON.stringify({action:'clear'})
+      });
+
+      await refresh();
+      openMemory();
+    }catch(e){
+      toast(e.message);
+    }
+  };
+}
+
+function saveFavorite(text){
+  if(!text)return;
+
+  openSheet(
+    'Избранное',
+    `<div class="card">
+      <div>${esc(text)}</div>
+      <button class="primary" id="favSave" style="margin-top:8px">Сохранить</button>
+    </div>`
+  );
+
+  $('favSave').onclick=async()=>{
+    try{
+      await api('/api/favorite',{
+        method:'POST',
+        body:JSON.stringify({answer:text})
+      });
+
+      await refresh();
+      closeSheet();
+      toast('Сохранено');
+    }catch(e){
+      toast(e.message);
+    }
+  };
+}
+
+function favorites(){
+  const fav=state.data?.favorites||[];
+
+  let h='<div class="card">';
+
+  if(!fav.length){
+    h+='<div class="empty">Избранное пусто.</div>';
+  }else{
+    fav.forEach(x=>{
+      h+=`
+        <div class="item">
+          <div class="grow">
+            <small>${esc(x.text||'')}</small>
+          </div>
+          <button class="close" data-fav="${esc(x.id)}">×</button>
+        </div>
+      `;
+    });
+  }
+
+  h+='</div>';
+
+  openSheet('Избранное',h);
+
+  document.querySelectorAll('[data-fav]').forEach(b=>{
+    b.onclick=async()=>{
+      try{
+        await api('/api/favorite/delete',{
+          method:'POST',
+          body:JSON.stringify({id:b.dataset.fav})
+        });
+
+        await refresh();
+        favorites();
+      }catch(e){
+        toast(e.message);
+      }
+    };
+  });
+}
+
+function activate(){
+  openSheet(
+    'Активация',
+    `
+      <div class="card">
+        <input class="field" id="licenseCode" placeholder="Код лицензии">
+        <button class="primary" id="activateLicense">Активировать</button>
+      </div>
+    `
+  );
+
+  $('activateLicense').onclick=async()=>{
+    const code=$('licenseCode').value.trim();
+
+    if(!code){
+      toast('Введи код');
+      return;
+    }
+
+    try{
+      const d=await api('/api/activate',{
+        method:'POST',
+        body:JSON.stringify({code})
+      });
+
+      toast(d.message||'Готово');
+      await refresh();
+      closeSheet();
+    }catch(e){
+      toast(e.message);
+    }
+  };
+}
+
+async function settingsSave(){
+  try{
+    await api('/api/settings',{
+      method:'POST',
+      body:JSON.stringify({
+        model:state.selectedModel||state.data?.model||'auto',
+        style:$('style').value
+      })
+    });
+
+    await refresh();
+    toast('Сохранено');
+  }catch(e){
+    toast(e.message);
+  }
+}
+
+async function mediaModels(kind){
+  state.mediaKind=kind;
+
+  try{
+    const d=await api('/api/media/models');
+
+    state.mediaModels=(d.models||[])
+      .filter(x=>x.kind===kind);
 
     renderMediaModels();
-
-    if(state.mediaModels.length){
-      const first = state.mediaModels[0];
-
-      state.selectedMediaModel =
-        state.mediaModels.find(model =>
-          model.id === state.selectedMediaModel?.id
-        ) || first;
-    }
-  }catch(error){
-    $("mediaModels").innerHTML =
-      `<div class="muted">${escapeHtml(error.message)}</div>`;
+  }catch(e){
+    $('mediaModels').innerHTML=
+      `<div class="status">${esc(e.message)}</div>`;
   }
 }
 
 function renderMediaModels(){
-  const container = $("mediaModels");
+  const box=$('mediaModels');
 
-  container.innerHTML = "";
+  box.innerHTML='';
 
   if(!state.mediaModels.length){
-    container.innerHTML =
-      `<div class="muted">Модели этого типа сейчас недоступны.</div>`;
+    box.innerHTML='<div class="status">Модели недоступны.</div>';
+    state.mediaModel=null;
     return;
   }
 
-  const fragment = document.createDocumentFragment();
+  state.mediaModel=state.mediaModels[0];
 
-  state.mediaModels.forEach(model => {
-    const id = String(model.id || model.name || "");
+  state.mediaModels.forEach(m=>{
+    const b=document.createElement('button');
 
-    const button = document.createElement("button");
+    b.className='mediaModel '+
+      (m.id===state.mediaModel?.id?'active':'');
 
-    button.type = "button";
-    button.className =
-      `mediaModel ${
-        String(state.selectedMediaModel?.id || "") === id
-          ? "selected"
-          : ""
-      }`;
-
-    button.dataset.model = id;
-
-    button.innerHTML = `
-      <div class="modelName">${escapeHtml(model.name || id)}</div>
-      <div class="modelDesc">${escapeHtml(model.description || model.desc || "")}</div>
+    b.innerHTML=`
+      <b>${esc(m.name||m.id)}</b>
+      <div class="muted">${esc(m.id)}</div>
     `;
 
-    button.addEventListener("click",() => {
-      state.selectedMediaModel = model;
-      renderMediaModels();
-    });
+    b.onclick=()=>{
+      state.mediaModel=m;
 
-    fragment.appendChild(button);
+      document.querySelectorAll('.mediaModel')
+        .forEach(x=>x.classList.remove('active'));
+
+      b.classList.add('active');
+    };
+
+    box.appendChild(b);
   });
-
-  container.appendChild(fragment);
 }
 
-function renderMediaExtraFields(){
-  const container = $("mediaExtraFields");
-  container.innerHTML = "";
-
-  if(state.mediaKind === "video"){
-    container.innerHTML = `
-      <div>
-        <div class="fieldLabel">Длительность</div>
-        <select class="field" id="mediaDuration">
-          <option value="5">5 секунд</option>
-          <option value="10">10 секунд</option>
-        </select>
+async function openMedia(){
+  openSheet(
+    'Media Studio',
+    `
+      <div class="tabs">
+        <button class="tab active" data-kind="image">Фото</button>
+        <button class="tab" data-kind="video">Видео</button>
+        <button class="tab" data-kind="tts">TTS</button>
+        <button class="tab" data-kind="music">Музыка</button>
+        <button class="tab" data-kind="3d">3D</button>
       </div>
-    `;
-  }
 
-  if(state.mediaKind === "tts"){
-    container.innerHTML = `
-      <div>
-        <div class="fieldLabel">Голос</div>
-        <select class="field" id="mediaVoice">
-          <option value="default">Стандартный</option>
-        </select>
-      </div>
-    `;
-  }
+      <div id="mediaModels" class="mediaModels"></div>
 
-  if(state.mediaKind === "music"){
-    container.innerHTML = `
-      <div>
-        <div class="fieldLabel">Длительность</div>
-        <select class="field" id="musicDuration">
-          <option value="30">30 секунд</option>
-          <option value="60">60 секунд</option>
-          <option value="120">120 секунд</option>
-        </select>
-      </div>
-    `;
-  }
+      <textarea
+        class="field"
+        id="mediaPrompt"
+        placeholder="Опиши, что создать…"
+      ></textarea>
 
-  if(state.mediaKind === "3d"){
-    container.innerHTML = `
-      <div class="muted">
-        3D-генерация доступна только для моделей, которые поддерживают этот режим.
-      </div>
-    `;
-  }
-}
+      <input
+        class="field"
+        id="mediaDuration"
+        type="number"
+        min="1"
+        max="120"
+        placeholder="Длительность (если поддерживается)"
+      >
 
-function selectMediaKind(kind){
-  state.mediaKind = kind;
-  state.selectedMediaModel = null;
+      <button class="primary" id="generateMedia">
+        Сгенерировать
+      </button>
 
-  document.querySelectorAll(".mediaTab").forEach(button => {
-    button.classList.toggle(
-      "active",
-      button.dataset.kind === kind
-    );
+      <div
+        id="mediaStatus"
+        class="status hidden"
+        style="margin-top:7px"
+      ></div>
+
+      <div id="mediaResult" style="margin-top:7px"></div>
+    `
+  );
+
+  document.querySelectorAll('[data-kind]').forEach(b=>{
+    b.onclick=()=>{
+      document.querySelectorAll('[data-kind]')
+        .forEach(x=>x.classList.remove('active'));
+
+      b.classList.add('active');
+
+      mediaModels(b.dataset.kind);
+    };
   });
 
-  renderMediaExtraFields();
-  loadMediaModels(kind);
+  await mediaModels('image');
+
+  $('generateMedia').onclick=generateMedia;
 }
 
 async function generateMedia(){
   if(state.generating)return;
 
-  const prompt = $("mediaPrompt").value.trim();
+  const prompt=$('mediaPrompt').value.trim();
 
   if(!prompt){
-    toast("Напиши промпт");
+    toast('Напиши промпт');
     return;
   }
 
-  if(!state.selectedMediaModel){
-    toast("Выбери модель");
+  if(!state.mediaModel){
+    toast('Выбери модель');
     return;
   }
 
-  state.generating = true;
-
-  const button = $("generateMediaBtn");
-  setLoading(button,true,"Создание…");
-
-  const status = $("mediaStatus");
-  const result = $("mediaResult");
-
-  status.classList.add("show");
-  status.textContent = "Создаём задачу…";
-  result.innerHTML = "";
+  state.generating=true;
+  $('generateMedia').disabled=true;
+  $('mediaStatus').classList.remove('hidden');
+  $('mediaStatus').textContent='Создаём…';
 
   try{
-    const payload = {
-      kind:state.mediaKind,
-      model:
-        state.selectedMediaModel.id ||
-        state.selectedMediaModel.name,
-      prompt
-    };
+    const opts={};
 
-    const duration =
-      $("mediaDuration")?.value ||
-      $("musicDuration")?.value;
-
-    if(duration){
-      payload.duration = Number(duration);
+    if($('mediaDuration').value){
+      opts.duration=Number($('mediaDuration').value);
     }
 
-    const voice = $("mediaVoice")?.value;
-
-    if(voice){
-      payload.voice = voice;
-    }
-
-    const data = await api("/api/media/generate",{
-      method:"POST",
-      body:JSON.stringify(payload)
+    const d=await api('/api/media/generate',{
+      method:'POST',
+      body:JSON.stringify({
+        kind:state.mediaKind,
+        model:state.mediaModel.id,
+        prompt,
+        opts
+      }),
+      timeout:35000
     });
 
-    const jobId =
-      data?.job_id ||
-      data?.jobId ||
-      data?.id;
-
-    if(!jobId){
-      throw new Error("Сервер не вернул ID задачи");
-    }
-
-    status.textContent = "Задача создана. Ожидаем результат…";
-
-    await pollMediaJob(jobId);
-  }catch(error){
-    status.textContent = `Ошибка: ${error.message}`;
-    toast(error.message);
+    await pollMedia(d.job_id);
+  }catch(e){
+    $('mediaStatus').textContent=e.message;
   }finally{
-    state.generating = false;
-    setLoading(button,false);
+    state.generating=false;
+    $('generateMedia').disabled=false;
   }
 }
 
-async function pollMediaJob(jobId){
-  const status = $("mediaStatus");
-  const result = $("mediaResult");
-
-  let attempts = 0;
-
-  while(attempts < 120){
-    attempts++;
-
-    const data = await api(
-      `/api/media/jobs/${encodeURIComponent(jobId)}`
+async function pollMedia(id){
+  for(let i=0;i<240;i++){
+    const d=await api(
+      '/api/media/jobs/'+encodeURIComponent(id)
     );
 
-    const job =
-      data?.job ||
-      data;
+    if(d.status==='success'){
+      const urls=d.urls||[];
 
-    const jobStatus =
-      String(job?.status || "").toLowerCase();
+      $('mediaStatus').textContent='Готово';
 
-    if(
-      jobStatus === "completed" ||
-      jobStatus === "success" ||
-      jobStatus === "done"
-    ){
-      status.textContent = "Готово";
+      $('mediaResult').innerHTML=urls.length
+        ? `<div class="result">
+            ${urls.map(u=>`
+              <div>
+                <a
+                  href="${esc(u)}"
+                  target="_blank"
+                  rel="noopener"
+                >Открыть результат</a>
+              </div>
+            `).join('')}
+          </div>`
+        : '<div class="result">Готово, но ссылка не вернулась.</div>';
 
-      const url =
-        job?.url ||
-        job?.result_url ||
-        job?.resultUrl ||
-        job?.output_url ||
-        job?.outputUrl;
-
-      if(url){
-        result.innerHTML = `
-          <div class="result">
-            <div class="label">Результат</div>
-            <div style="margin-top:7px">
-              <a href="${escapeHtml(url)}" target="_blank" rel="noopener">
-                Открыть результат
-              </a>
-            </div>
-          </div>
-        `;
-      }else{
-        result.innerHTML = `
-          <div class="result">
-            <div class="label">Готово</div>
-            <div class="muted" style="margin-top:5px">
-              Результат создан, но сервер не вернул публичную ссылку.
-            </div>
-          </div>
-        `;
-      }
-
-      haptic("success");
+      haptic('light');
       return;
     }
 
-    if(
-      jobStatus === "failed" ||
-      jobStatus === "error" ||
-      jobStatus === "cancelled"
-    ){
+    if(d.status==='failed'){
       throw new Error(
-        job?.error ||
-        job?.message ||
-        "Генерация завершилась с ошибкой"
+        d.error||'Генерация завершилась ошибкой'
       );
     }
 
-    const progress =
-      job?.progress ??
-      job?.percent;
+    $('mediaStatus').textContent=
+      d.status==='processing'
+        ? 'Генерация…'
+        : 'Подготовка…';
 
-    status.textContent =
-      progress != null
-        ? `Создание… ${progress}%`
-        : "Создание…";
-
-    await new Promise(resolve => setTimeout(resolve,1500));
+    await new Promise(r=>setTimeout(r,1500));
   }
 
-  throw new Error("Превышено время ожидания результата");
+  throw new Error('Превышено время ожидания');
 }
 
-async function loadState(){
-  try{
-    const data = await api("/api/state");
+async function adminAction(type){
+  let html='';
 
-    state.lastState = data;
+  if(type==='rules'){
+    const d=await api('/api/admin/rules');
 
-    const user = data?.user || data?.profile || null;
-
-    if(user){
-      state.user = user;
-
-      const name =
-        user.first_name ||
-        user.name ||
-        user.username ||
-        "Пользователь";
-
-      $("profileName").textContent = name;
-
-      $("profileId").textContent =
-        `ID: ${user.id ?? "—"}`;
-
-      $("profileAvatar").textContent =
-        String(name).trim().charAt(0).toUpperCase() || "B";
-    }
-
-    $("statRequests").textContent =
-      data?.stats?.requests ??
-      data?.requests ??
-      "0";
-
-    $("statFavorites").textContent =
-      data?.stats?.favorites ??
-      data?.favorites ??
-      "0";
-
-    $("statChats").textContent =
-      data?.stats?.chats ??
-      data?.chats_count ??
-      state.chats.length ??
-      "0";
-
-    $("statLicense").textContent =
-      data?.license?.active
-        ? "Активна"
-        : data?.license
-          ? "Есть"
-          : "—";
-
-    $("headerSub").textContent =
-      `V17.2 • ${data?.online === false ? "offline" : "онлайн"}`;
-
-    if(data?.is_admin){
-      $("adminCard").classList.remove("hidden");
-    }
-  }catch(error){
-    $("headerSub").textContent = "V17.2";
-  }
-}
-
-async function loadMemory(){
-  try{
-    const data = await api("/api/memory");
-
-    $("memoryText").value =
-      data?.memory ||
-      data?.text ||
-      "";
-  }catch(error){
-    toast(error.message);
-  }
-}
-
-async function saveMemory(){
-  const text = $("memoryText").value;
-
-  try{
-    await api("/api/memory",{
-      method:"POST",
-      body:JSON.stringify({
-        memory:text
-      })
-    });
-
-    toast("Память сохранена");
-    closeSheet();
-  }catch(error){
-    toast(error.message);
-  }
-}
-
-async function activateLicense(){
-  const input = $("licenseInput");
-  const code = input.value.trim();
-
-  if(!code){
-    toast("Введи код");
-    return;
-  }
-
-  const button = $("activateBtn");
-
-  setLoading(button,true,"Активация…");
-
-  try{
-    const data = await api("/api/activate",{
-      method:"POST",
-      body:JSON.stringify({
-        code
-      })
-    });
-
-    toast(
-      data?.message ||
-      "Лицензия активирована"
-    );
-
-    input.value = "";
-    await loadState();
-  }catch(error){
-    toast(error.message);
-  }finally{
-    setLoading(button,false);
-  }
-}
-
-async function openMemory(){
-  $("mediaStudio").classList.add("hidden");
-  $("adminStudio").classList.add("hidden");
-  $("memoryStudio").classList.remove("hidden");
-
-  openSheet("Память");
-  await loadMemory();
-}
-
-function openMedia(){
-  $("memoryStudio").classList.add("hidden");
-  $("adminStudio").classList.add("hidden");
-  $("mediaStudio").classList.remove("hidden");
-
-  openSheet("Media Studio");
-
-  selectMediaKind(state.mediaKind);
-}
-
-async function adminRequest(url, method="GET", body=null){
-  const options = {
-    method
-  };
-
-  if(body){
-    options.body = JSON.stringify(body);
-  }
-
-  return api(url,options);
-}
-
-async function openAdmin(type){
-  $("mediaStudio").classList.add("hidden");
-  $("memoryStudio").classList.add("hidden");
-  $("adminStudio").classList.remove("hidden");
-
-  openSheet("Админ-панель");
-
-  const container = $("adminStudio");
-
-  container.innerHTML =
-    `<div class="card"><div class="muted">Загрузка…</div></div>`;
-
-  try{
-    let data;
-
-    if(type === "rules"){
-      data = await adminRequest("/api/admin/rules");
-    }
-
-    if(type === "stats"){
-      data = await adminRequest("/api/admin/stats");
-    }
-
-    if(type === "license"){
-      data = await adminRequest("/api/admin/license");
-    }
-
-    container.innerHTML = `
+    html=`
       <div class="card">
-        <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:11px;color:#d8deea">${escapeHtml(JSON.stringify(data,null,2))}</pre>
+        ${(d.rules||[]).map(r=>`
+          <div class="item">
+            <div class="grow">
+              <b>${esc(r.pattern)}</b>
+              <small>${esc(r.response)}</small>
+            </div>
+            <button class="close" data-rule="${esc(r.id)}">×</button>
+          </div>
+        `).join('')}
+      </div>
+
+      <input class="field" id="rp" placeholder="Фраза">
+
+      <textarea
+        class="field"
+        id="rr"
+        placeholder="Ответ"
+      ></textarea>
+
+      <button class="primary" id="ra">Добавить</button>
+    `;
+  }else if(type==='stats'){
+    const d=await api('/api/admin/stats');
+
+    const s=d.stats||{};
+
+    html=`
+      <div class="card">
+        Пользователей: ${esc(s.users??0)}<br>
+        Запросов: ${esc(s.requests??0)}<br>
+        Ошибок: ${esc(s.errors??0)}<br>
+        Правил: ${esc(s.rules??0)}
       </div>
     `;
-  }catch(error){
-    container.innerHTML =
-      `<div class="card"><div class="muted">${escapeHtml(error.message)}</div></div>`;
-  }
-}
-
-async function clearCurrentChat(){
-  if(state.sending)return;
-
-  state.messages = [];
-  renderMessages();
-
-  toast("Локальный чат очищен");
-}
-
-function updateViewport(){
-  const vv = window.visualViewport;
-
-  if(!vv){
-    document.documentElement.style.setProperty(
-      "--vvh",
-      `${window.innerHeight}px`
-    );
-    return;
+  }else{
+    html=`
+      <input class="field" id="target" placeholder="USER_ID">
+      <input class="field" id="days" type="number" placeholder="Дни">
+      <input
+        class="field"
+        id="limit"
+        type="number"
+        placeholder="Лимит запросов, 0 = без лимита"
+      >
+      <button class="primary" id="give">Выдать</button>
+    `;
   }
 
-  document.documentElement.style.setProperty(
-    "--vvh",
-    `${vv.height}px`
-  );
-}
+  openSheet('Админ',html);
 
-function setupEvents(){
-  document.querySelectorAll(".navBtn").forEach(button => {
-    button.addEventListener("click",() => {
-      showScreen(button.dataset.screen);
+  if(type==='rules'){
+    document.querySelectorAll('[data-rule]').forEach(b=>{
+      b.onclick=async()=>{
+        try{
+          await api('/api/admin/rules',{
+            method:'POST',
+            body:JSON.stringify({
+              action:'delete',
+              id:b.dataset.rule
+            })
+          });
+
+          adminAction('rules');
+        }catch(e){
+          toast(e.message);
+        }
+      };
     });
-  });
 
-  $("newChatBtn").addEventListener(
-    "click",
-    createNewChat
-  );
+    $('ra').onclick=async()=>{
+      try{
+        await api('/api/admin/rules',{
+          method:'POST',
+          body:JSON.stringify({
+            action:'add',
+            pattern:$('rp').value,
+            response:$('rr').value,
+            mode:'contains'
+          })
+        });
 
-  $("sendBtn").addEventListener(
-    "click",
-    sendMessage
-  );
-
-  $("input").addEventListener(
-    "input",
-    autoResizeInput
-  );
-
-  $("input").addEventListener(
-    "keydown",
-    event => {
-      if(
-        event.key === "Enter" &&
-        !event.shiftKey &&
-        !event.isComposing
-      ){
-        event.preventDefault();
-        sendMessage();
+        adminAction('rules');
+      }catch(e){
+        toast(e.message);
       }
-    }
-  );
+    };
+  }
 
-  $("attachBtn").addEventListener(
-    "click",
-    () => $("fileInput").click()
-  );
+  if(type==='license'){
+    $('give').onclick=async()=>{
+      try{
+        const d=await api('/api/admin/license',{
+          method:'POST',
+          body:JSON.stringify({
+            user_id:$('target').value,
+            days:Number($('days').value),
+            requests:Number($('limit').value||0)
+          })
+        });
 
-  $("fileInput").addEventListener(
-    "change",
-    event => {
-      const file = event.target.files?.[0];
-
-      if(!file){
-        return;
-      }
-
-      state.selectedFile = file;
-
-      $("filePreviewName").textContent =
-        `${file.name} • ${Math.round(file.size / 1024)} КБ`;
-
-      $("filePreview").classList.add("show");
-
-      haptic("light");
-    }
-  );
-
-  $("removeFileBtn").addEventListener(
-    "click",
-    removeFile
-  );
-
-  document.querySelectorAll(".suggestion").forEach(button => {
-    button.addEventListener("click",() => {
-      $("input").value = button.dataset.prompt || "";
-      autoResizeInput();
-      $("input").focus();
-    });
-  });
-
-  $("openMediaBtn").addEventListener(
-    "click",
-    openMedia
-  );
-
-  $("generateMediaBtn").addEventListener(
-    "click",
-    generateMedia
-  );
-
-  document.querySelectorAll(".mediaTab").forEach(button => {
-    button.addEventListener("click",() => {
-      selectMediaKind(button.dataset.kind);
-    });
-  });
-
-  $("memoryBtn").addEventListener(
-    "click",
-    openMemory
-  );
-
-  $("saveMemoryBtn").addEventListener(
-    "click",
-    saveMemory
-  );
-
-  $("activateBtn").addEventListener(
-    "click",
-    activateLicense
-  );
-
-  $("clearChatBtn").addEventListener(
-    "click",
-    clearCurrentChat
-  );
-
-  $("adminRulesBtn").addEventListener(
-    "click",
-    () => openAdmin("rules")
-  );
-
-  $("adminStatsBtn").addEventListener(
-    "click",
-    () => openAdmin("stats")
-  );
-
-  $("adminLicenseBtn").addEventListener(
-    "click",
-    () => openAdmin("license")
-  );
-
-  $("sheetBackdrop").addEventListener(
-    "click",
-    event => {
-      if(event.target === $("sheetBackdrop")){
+        toast(d.code||d.message||'Готово');
         closeSheet();
+      }catch(e){
+        toast(e.message);
       }
-    }
-  );
-}
-
-async function load(){
-  updateViewport();
-  setupEvents();
-
-  autoResizeInput();
-
-  await Promise.allSettled([
-    loadState(),
-    loadModels()
-  ]);
-
-  try{
-    const data = await api("/api/state");
-
-    if(Array.isArray(data?.messages)){
-      state.messages = data.messages.map(message => ({
-        role:message.role,
-        content:message.content || message.text || ""
-      }));
-
-      renderMessages();
-    }
-
-    if(data?.chat_id){
-      state.selectedChat = data.chat_id;
-    }
-  }catch(error){}
-
-  if(tg?.initDataUnsafe?.user){
-    const user = tg.initDataUnsafe.user;
-
-    state.user = user;
-
-    const name =
-      user.first_name ||
-      user.username ||
-      "Пользователь";
-
-    $("profileName").textContent = name;
-
-    $("profileId").textContent =
-      `ID: ${user.id ?? "—"}`;
-
-    $("profileAvatar").textContent =
-      String(name).charAt(0).toUpperCase();
+    };
   }
 }
 
-window.addEventListener(
-  "resize",
-  updateViewport,
-  {passive:true}
-);
+$('close').onclick=closeSheet;
 
-window.visualViewport?.addEventListener(
-  "resize",
-  updateViewport,
-  {passive:true}
-);
-
-window.visualViewport?.addEventListener(
-  "scroll",
-  updateViewport,
-  {passive:true}
-);
-
-document.addEventListener(
-  "visibilitychange",
-  () => {
-    if(document.visibilityState === "visible"){
-      updateViewport();
-    }
+$('sheetBack').onclick=e=>{
+  if(e.target===$('sheetBack')){
+    closeSheet();
   }
-);
+};
 
-window.addEventListener(
-  "error",
-  event => {
-    console.error(
-      "Bulba Mini App error:",
-      event.error || event.message
-    );
+$('send').onclick=send;
+
+$('attach').onclick=()=>{
+  $('file').click();
+};
+
+$('removeFile').onclick=removeFile;
+
+$('file').onchange=()=>{
+  state.file=$('file').files?.[0]||null;
+
+  if(state.file){
+    $('filename').textContent=state.file.name;
+    $('filebar').classList.add('show');
   }
-);
+};
 
-window.addEventListener(
-  "unhandledrejection",
-  event => {
-    console.error(
-      "Bulba Mini App rejection:",
-      event.reason
-    );
+$('input').addEventListener('input',resize);
+
+$('input').addEventListener('keydown',e=>{
+  if(
+    e.key==='Enter' &&
+    !e.shiftKey &&
+    !e.isComposing
+  ){
+    e.preventDefault();
+    send();
   }
-);
+});
 
-load();
+$('newChat').onclick=newChat;
+$('clearChat').onclick=clearChat;
+$('saveSettings').onclick=settingsSave;
+$('memory').onclick=openMemory;
+$('favoritesBtn').onclick=favorites;
+$('activate').onclick=activate;
+$('openMedia').onclick=openMedia;
+
+document.querySelectorAll('.chip').forEach(b=>{
+  b.onclick=()=>{
+    $('input').value=b.dataset.p;
+    resize();
+    $('input').focus();
+  };
+});
+
+document.querySelectorAll('.nav button').forEach(b=>{
+  b.onclick=()=>screen(b.dataset.screen);
+});
+
+refresh();
+resize();
+
 })();
 </script>
 </body>
