@@ -142,5 +142,6 @@ def claim_success(job_id):
     with _jobs_lock:
         item=_jobs.get(str(job_id))
         if not item or item.get("status")!="success": return None
-        if item.get("license_claimed"): return dict(item)
-        item["license_claimed"]=True; return dict(item)
+        if item.get("license_claimed"): return None
+        item["license_claimed"]=True
+        return dict(item)
