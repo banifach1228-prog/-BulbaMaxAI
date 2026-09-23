@@ -1201,6 +1201,10 @@ def save_favorite(u, text):
 
 
 def start_media_prompt(chat_id, u, kind):
+    user_id = str(u.get("_user_id") or "")
+    if not user_id:
+        # Runtime identity is normally supplied by process_message; keep this helper safe.
+        user_id = str(next((uid for uid, item in db.get("users", {}).items() if item is u), ""))
     if not media_service.configured():
         send_message(chat_id, "⚠️ Media Studio сейчас недоступна: PLUSVIBE_API_KEY не настроен.", main_keyboard(user_id=user_id))
         return
@@ -1214,7 +1218,31 @@ def start_media_prompt(chat_id, u, kind):
     send_message(chat_id, f"{labels.get(kind, '🎨 Генерация')}\n\nНапиши описание того, что нужно создать.", main_keyboard(user_id=user_id))
 
 
+def _download_media_result(url, timeout=180):
+    """Download the provider result ourselves so Telegram does not have to fetch a signed URL."""
+    r = requests.get(str(url), timeout=timeout, allow_redirects=True)
+    r.raise_for_status()
+    data = r.content
+    if not data:
+        raise RuntimeError("Провайдер вернул пустой файл.")
+    content_type = (r.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0].lower()
+    return data, content_type
+
+
+def _media_filename(kind, content_type):
+    ext = {
+        "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+        "video/mp4": ".mp4", "video/webm": ".webm",
+        "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/wav": ".wav",
+    }.get(content_type)
+    if not ext:
+        ext = {"image": ".jpg", "video": ".mp4", "tts": ".mp3", "music": ".mp3", "3d": ".glb"}.get(kind, ".bin")
+    return f"bulbamaxai_{kind}{ext}"
+
+
 def run_media_job(chat_id, user_id, job_id, kind):
+    user_id = str(user_id)
+    u = get_user(user_id)
     deadline = time.time() + {"image":180,"video":720,"tts":240,"music":360,"3d":420}.get(kind,360)
     while time.time() < deadline:
         job = media_service.job_status(job_id)
@@ -1226,25 +1254,38 @@ def run_media_job(chat_id, user_id, job_id, kind):
                 return
             urls = claimed.get("urls") or []
             if not urls:
-                send_message(chat_id, "✅ Генерация завершена, но провайдер не вернул ссылку.", main_keyboard(user_id=user_id)); return
-            url = urls[0]
-            if kind == "image":
-                sent = tg("sendPhoto", {"chat_id": chat_id, "photo": url, "caption": "🖼 Готово"})
-            elif kind == "video":
-                sent = tg("sendVideo", {"chat_id": chat_id, "video": url, "caption": "🎬 Готово"}, timeout=120)
-            elif kind in ("tts", "music"):
-                sent = tg("sendAudio", {"chat_id": chat_id, "audio": url, "caption": "🔊 Готово"}, timeout=120)
-            else:
-                sent = tg("sendDocument", {"chat_id": chat_id, "document": url, "caption": "🧊 3D результат"}, timeout=120)
-            if not sent:
-                # Do not lose the user's media result/request accounting if Telegram rejected the send.
                 media_service._set_job(job_id, finalized=False)
-                send_message(chat_id, "❌ Не удалось отправить готовый файл в Telegram. Попробуй проверить задачу позже.", main_keyboard(user_id=user_id))
+                send_message(chat_id, "❌ Провайдер завершил генерацию, но не вернул файл.", main_keyboard(user_id=user_id)); return
+            url = urls[0]
+            try:
+                raw, content_type = _download_media_result(url, timeout=180 if kind != "video" else 300)
+                filename = _media_filename(kind, content_type)
+                if kind == "image":
+                    sent = tg("sendPhoto", {"chat_id": chat_id, "caption": "🖼 Готово"}, files={"photo": (filename, raw, content_type)}, timeout=120)
+                    if not sent:
+                        sent = tg("sendDocument", {"chat_id": chat_id, "caption": "🖼 Готово"}, files={"document": (filename, raw, content_type)}, timeout=120)
+                elif kind == "video":
+                    sent = tg("sendVideo", {"chat_id": chat_id, "caption": "🎬 Готово"}, files={"video": (filename, raw, content_type)}, timeout=300)
+                    if not sent:
+                        sent = tg("sendDocument", {"chat_id": chat_id, "caption": "🎬 Готово"}, files={"document": (filename, raw, content_type)}, timeout=300)
+                elif kind in ("tts", "music"):
+                    sent = tg("sendAudio", {"chat_id": chat_id, "caption": "🔊 Готово"}, files={"audio": (filename, raw, content_type)}, timeout=180)
+                    if not sent:
+                        sent = tg("sendDocument", {"chat_id": chat_id, "caption": "🎵 Готово"}, files={"document": (filename, raw, content_type)}, timeout=180)
+                else:
+                    sent = tg("sendDocument", {"chat_id": chat_id, "caption": "🧊 3D результат"}, files={"document": (filename, raw, content_type)}, timeout=180)
+            except Exception as exc:
+                print("Media result download/send error:", repr(exc))
+                sent = None
+            if not sent:
+                # Allow a later status check/retry to finalize the result again.
+                media_service._set_job(job_id, finalized=False)
+                send_message(chat_id, "❌ Генерация готова, но файл не удалось отправить в Telegram. Попробуй ещё раз.", main_keyboard(user_id=user_id))
                 return
-            chat = get_chat(u)
             prompt = str(claimed.get("prompt") or "Медиа-задача")
             add_history(u, "user", prompt)
             add_history(u, "assistant", f"Создано медиа: {url}")
+            chat = get_chat(u)
             chat["last_prompt"] = prompt
             chat["last_request"] = {"kind": kind, "text": prompt}
             record_success(u, chat)
