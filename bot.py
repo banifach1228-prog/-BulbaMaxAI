@@ -28,7 +28,9 @@ from licenses import (
 
 import requests
 
-BOT_VERSION = "V18.0"
+import media_service
+
+BOT_VERSION = "V18.5.1"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_KEY = os.getenv("API_KEY", "").strip()
 
@@ -68,6 +70,8 @@ api_session.headers.update({
 
 db = {"users": {}, "total_requests": 0, "total_errors": 0, "rules": [], "version": BOT_VERSION}
 DB_LOCK = threading.RLock()
+AI_INFLIGHT_LOCK = threading.RLock()
+AI_INFLIGHT_USERS = set()
 
 
 def load_db():
@@ -156,6 +160,8 @@ def default_user():
         "rate": [],
         "pinned_chats": [],
         "favorites": [],
+        "pending_action": None,
+        "notifications": True,
     }
 
 
@@ -177,6 +183,8 @@ def get_user(uid):
     u.setdefault("rate", [])
     u.setdefault("pinned_chats", [])
     u.setdefault("favorites", [])
+    u.setdefault("pending_action", None)
+    u.setdefault("notifications", True)
     if not u["chats"]:
         u["chats"]["main"] = default_chat()
         u["active_chat"] = "main"
@@ -261,17 +269,23 @@ def answer_callback(callback_id, text=None):
     tg("answerCallbackQuery", data)
 
 
-def main_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "🤖 Авто"}, {"text": "🧠 Модель"}],
-            [{"text": "📊 Статистика"}, {"text": "💾 Память"}],
-            [{"text": "💬 Чаты"}, {"text": "🆕 Новый чат"}],
-            [{"text": "🧹 Очистить"}, {"text": "⚙️ Настройки"}],
-        ],
-        "resize_keyboard": True,
-    }
+def main_keyboard(user_id=None):
+    rows = [
+        [{"text": "🤖 Чат"}, {"text": "🧠 Модели"}],
+        [{"text": "💬 Чаты"}, {"text": "🎨 Генерация"}],
+        [{"text": "💾 Память"}, {"text": "⭐ Избранное"}],
+        [{"text": "📊 Статистика"}, {"text": "⚙️ Настройки"}],
+    ]
+    if user_id is not None and is_admin(user_id):
+        rows.append([{"text": "👑 Админ"}, {"text": "🔑 Лицензия"}])
+    else:
+        rows.append([{"text": "🔑 Лицензия"}])
+    return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
 
+
+
+def answer_keyboard():
+    return {"inline_keyboard": [[{"text": "⭐ Сохранить", "callback_data": "favorite:last"}], [{"text": "🔄 Повторить", "callback_data": "retry"}]]}
 
 def retry_keyboard():
     return {"inline_keyboard": [[{"text": "🔄 Повторить", "callback_data": "retry"}]]}
@@ -821,11 +835,7 @@ def add_history(u, role, content):
 
 
 def detect_media_intent(text):
-    """Compatibility hook for miniapp_server.
-
-    Media generation is handled explicitly by Media Studio, so normal
-    chat messages must stay on the text-AI path.
-    """
+    """Legacy no-op kept for compatibility with older integrations."""
     return None
 
 
@@ -854,6 +864,29 @@ def record_success(u, chat):
     u["requests"] = int(u.get("requests") or 0) + 1
     chat["requests"] = int(chat.get("requests") or 0) + 1
     db["total_requests"] = int(db.get("total_requests") or 0) + 1
+
+
+def start_ai_request(chat_id, user_id, u, text, image=None, file_text=None, file_name=None, media_ref=None):
+    """Run a potentially long AI/file task outside the Telegram polling loop."""
+    uid = str(user_id)
+    with AI_INFLIGHT_LOCK:
+        if uid in AI_INFLIGHT_USERS:
+            send_message(chat_id, "⏳ Предыдущий запрос ещё выполняется. Дождись его завершения.", main_keyboard(user_id=user_id))
+            return False
+        AI_INFLIGHT_USERS.add(uid)
+
+    def worker():
+        try:
+            handle_ai_request(
+                chat_id, u, text, image=image, file_text=file_text,
+                file_name=file_name, media_ref=media_ref, user_id=user_id
+            )
+        finally:
+            with AI_INFLIGHT_LOCK:
+                AI_INFLIGHT_USERS.discard(uid)
+
+    threading.Thread(target=worker, name=f"bulba-ai-{uid}", daemon=True).start()
+    return True
 
 
 def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None):
@@ -892,9 +925,9 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             save_db()
             completed = True
             if status_msg:
-                edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
+                edit_message(chat_id, status_msg["message_id"], answer, answer_keyboard())
             else:
-                send_message(chat_id, answer, retry_keyboard())
+                send_message(chat_id, answer, answer_keyboard())
             return
 
         plan = local_action_plan(text, has_image=bool(image), has_file=bool(file_text))
@@ -1029,9 +1062,9 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
         completed = True
 
         if status_msg:
-            edit_message(chat_id, status_msg["message_id"], answer, retry_keyboard())
+            edit_message(chat_id, status_msg["message_id"], answer, answer_keyboard())
         else:
-            send_message(chat_id, answer, retry_keyboard())
+            send_message(chat_id, answer, answer_keyboard())
 
     except Exception as e:
         print("Request error:", repr(e))
@@ -1069,13 +1102,15 @@ def show_memory(chat_id, u):
 
 
 def show_chats(chat_id, u):
-    rows = []
+    rows=[]
     for name in u["chats"]:
-        mark = "✅ " if name == u["active_chat"] else ""
-        rows.append([{"text": mark + name[:45], "callback_data": "chat:" + name[:50]}])
-    rows.append([{"text": "➕ Новый чат", "callback_data": "new_chat"}])
-    rows.append([{"text": "⬅️ Назад", "callback_data": "back"}])
-    send_message(chat_id, "💬 Выбери чат:", {"inline_keyboard": rows})
+        mark="📌 " if name in u.get("pinned_chats",[]) else ""
+        active="✅ " if name==u["active_chat"] else ""
+        rows.append([{"text":active+mark+name[:40],"callback_data":"chat:open:"+name[:45]}])
+        rows.append([{"text":"✏️","callback_data":"chat:rename:"+name[:40]},{"text":"📌","callback_data":"chat:pin:"+name[:40]},{"text":"🗑","callback_data":"chat:delete:"+name[:40]}])
+    rows.append([{"text":"➕ Новый чат","callback_data":"new_chat"}])
+    rows.append([{"text":"⬅️ Назад","callback_data":"back"}])
+    send_message(chat_id,"💬 Мои чаты:", {"inline_keyboard":rows})
 
 
 def new_chat(u):
@@ -1097,6 +1132,144 @@ def new_chat(u):
     return name
 
 
+
+def media_keyboard():
+    return {"inline_keyboard": [
+        [{"text": "🖼 Изображение", "callback_data": "media:image"}],
+        [{"text": "🎬 Видео", "callback_data": "media:video"}],
+        [{"text": "🔊 Голос", "callback_data": "media:tts"}],
+        [{"text": "🎵 Музыка", "callback_data": "media:music"}],
+        [{"text": "🧊 3D", "callback_data": "media:3d"}],
+        [{"text": "⬅️ Назад", "callback_data": "back"}],
+    ]}
+
+
+def admin_keyboard():
+    return {"inline_keyboard": [
+        [{"text": "👥 Пользователи", "callback_data": "admin:users"}],
+        [{"text": "🔑 Лицензии", "callback_data": "admin:licenses"}],
+        [{"text": "📜 Правила", "callback_data": "admin:rules"}],
+        [{"text": "📊 Статистика", "callback_data": "admin:stats"}],
+        [{"text": "🚫 Блокировки", "callback_data": "admin:blocks"}],
+        [{"text": "⚙️ Настройки", "callback_data": "admin:settings"}],
+        [{"text": "⬅️ Назад", "callback_data": "back"}],
+    ]}
+
+
+def favorite_keyboard(fid):
+    return {"inline_keyboard": [[{"text": "🗑 Удалить", "callback_data": f"favdel:{fid}"}]]}
+
+
+def show_license(chat_id, user_id):
+    send_message(chat_id, "🔑 Лицензия\n\n" + get_license_status(user_id), {
+        "inline_keyboard": [
+            [{"text": "🔑 Активировать код", "callback_data": "license:activate"}],
+            [{"text": "🔄 Обновить", "callback_data": "license:status"}],
+        ]
+    })
+
+
+def show_settings(chat_id, u):
+    kb = {"inline_keyboard": [
+        [{"text": ("✅ " if u["style"] == "normal" else "") + "🧠 Обычно", "callback_data": "style:normal"}],
+        [{"text": ("✅ " if u["style"] == "short" else "") + "⚡ Кратко", "callback_data": "style:short"}],
+        [{"text": ("✅ " if u["style"] == "detailed" else "") + "📚 Подробно", "callback_data": "style:detailed"}],
+        [{"text": ("🔔 Уведомления: ВКЛ" if u.get("notifications", True) else "🔕 Уведомления: ВЫКЛ"), "callback_data": "settings:notifications"}],
+        [{"text": "🧹 Очистить текущий чат", "callback_data": "settings:clear"}],
+        [{"text": "⬅️ Назад", "callback_data": "back"}],
+    ]}
+    send_message(chat_id, "⚙️ Настройки\n\nВыбери нужный параметр:", kb)
+
+
+def show_favorites(chat_id, u):
+    favs = u.get("favorites", [])
+    if not favs:
+        send_message(chat_id, "⭐ Избранное\n\nПока ничего не сохранено.", main_keyboard(user_id=user_id))
+        return
+    for i, item in enumerate(favs[-20:], 1):
+        fid = str(item.get("id", i))
+        send_message(chat_id, f"⭐ Ответ #{i}\n\n{item.get('text','')}", favorite_keyboard(fid))
+
+
+def save_favorite(u, text):
+    favs = u.setdefault("favorites", [])
+    fid = secrets.token_hex(4)
+    favs.append({"id": fid, "text": str(text)[:12000], "created": int(time.time())})
+    u["favorites"] = favs[-50:]
+    save_db()
+    return fid
+
+
+def start_media_prompt(chat_id, u, kind):
+    if not media_service.configured():
+        send_message(chat_id, "⚠️ Media Studio сейчас недоступна: PLUSVIBE_API_KEY не настроен.", main_keyboard(user_id=user_id))
+        return
+    models = media_service.models_for_kind(kind)
+    if not models:
+        send_message(chat_id, "⚠️ Для этого типа генерации сейчас нет доступных моделей.", main_keyboard(user_id=user_id))
+        return
+    u["pending_action"] = {"type": "media_prompt", "kind": kind}
+    save_db()
+    labels = {"image":"🖼 Изображение", "video":"🎬 Видео", "tts":"🔊 Голос", "music":"🎵 Музыка", "3d":"🧊 3D"}
+    send_message(chat_id, f"{labels.get(kind, '🎨 Генерация')}\n\nНапиши описание того, что нужно создать.", main_keyboard(user_id=user_id))
+
+
+def run_media_job(chat_id, user_id, job_id, kind):
+    deadline = time.time() + {"image":180,"video":720,"tts":240,"music":360,"3d":420}.get(kind,360)
+    while time.time() < deadline:
+        job = media_service.job_status(job_id)
+        if not job:
+            send_message(chat_id, "❌ Медиа-задача не найдена.", main_keyboard(user_id=user_id)); return
+        if job.get("status") == "success":
+            claimed = media_service.claim_success(job_id)
+            if not claimed:
+                return
+            urls = claimed.get("urls") or []
+            if not urls:
+                send_message(chat_id, "✅ Генерация завершена, но провайдер не вернул ссылку.", main_keyboard(user_id=user_id)); return
+            url = urls[0]
+            if kind == "image":
+                sent = tg("sendPhoto", {"chat_id": chat_id, "photo": url, "caption": "🖼 Готово"})
+            elif kind == "video":
+                sent = tg("sendVideo", {"chat_id": chat_id, "video": url, "caption": "🎬 Готово"}, timeout=120)
+            elif kind in ("tts", "music"):
+                sent = tg("sendAudio", {"chat_id": chat_id, "audio": url, "caption": "🔊 Готово"}, timeout=120)
+            else:
+                sent = tg("sendDocument", {"chat_id": chat_id, "document": url, "caption": "🧊 3D результат"}, timeout=120)
+            if not sent:
+                # Do not lose the user's media result/request accounting if Telegram rejected the send.
+                media_service._set_job(job_id, finalized=False)
+                send_message(chat_id, "❌ Не удалось отправить готовый файл в Telegram. Попробуй проверить задачу позже.", main_keyboard(user_id=user_id))
+                return
+            chat = get_chat(u)
+            prompt = str(claimed.get("prompt") or "Медиа-задача")
+            add_history(u, "user", prompt)
+            add_history(u, "assistant", f"Создано медиа: {url}")
+            chat["last_prompt"] = prompt
+            chat["last_request"] = {"kind": kind, "text": prompt}
+            record_success(u, chat)
+            save_db()
+            send_message(chat_id, "Готово.\n\nМожно создать ещё один результат.", main_keyboard(user_id=user_id))
+            return
+        if job.get("status") == "failed":
+            send_message(chat_id, f"❌ Генерация не удалась.\n\n{job.get('error','Неизвестная ошибка')}", main_keyboard(user_id=user_id)); return
+        time.sleep(2.0)
+    send_message(chat_id, "⏳ Генерация ещё выполняется. Проверь результат позже или создай новый запрос.", main_keyboard(user_id=user_id))
+
+
+def start_media_job(chat_id, user_id, u, kind, prompt):
+    try:
+        job_id, selected = media_service.create_job(kind, prompt, user_id=user_id)
+        u["pending_action"] = None
+        save_db()
+        send_message(chat_id, f"🎨 Генерация запущена.\n\nМодель: {selected['id']}\n⏳ Статус: выполняется…")
+        threading.Thread(target=run_media_job, args=(chat_id, user_id, job_id, kind), daemon=True).start()
+    except PermissionError as e:
+        u["pending_action"] = None; save_db(); send_message(chat_id, f"⛔ {e}", main_keyboard(user_id=user_id))
+    except Exception as e:
+        u["pending_action"] = None; save_db(); print("Media start error:", repr(e)); send_message(chat_id, "❌ Не удалось запустить генерацию. Попробуй ещё раз.", main_keyboard(user_id=user_id))
+
+
 def process_message(msg):
     if "chat" not in msg:
         return
@@ -1105,6 +1278,41 @@ def process_message(msg):
     u = get_user(user_id)
 
     text = (msg.get("text") or "").strip()
+
+    pending = u.get("pending_action")
+    if text and pending and not text.startswith("/"):
+        if pending.get("type") == "media_prompt":
+            start_media_job(chat_id, user_id, u, pending.get("kind"), text)
+            return
+        if pending.get("type") == "remember":
+            u["memory"][str(int(time.time()))] = text[:1000]
+            u["pending_action"] = None
+            save_db()
+            send_message(chat_id, "💾 Запомнил.", main_keyboard(user_id=user_id))
+            return
+        if pending.get("type") == "activate":
+            ok, message = activate_license(user_id, text)
+            u["pending_action"] = None
+            save_db()
+            send_message(chat_id, message, main_keyboard(user_id=user_id))
+            return
+        if pending.get("type") == "chat_name":
+            name = re.sub(r"[\n\r]", " ", text).strip()[:40] or "Чат"
+            if name in u["chats"]: name += " 2"
+            u["chats"][name] = default_chat(); u["active_chat"] = name; u["pending_action"] = None; save_db()
+            send_message(chat_id, f"✅ Создан чат «{name}».\nТеперь ты находишься в нём.", main_keyboard(user_id=user_id))
+            return
+        if pending.get("type") == "rename_chat":
+            old=pending.get("old")
+            name=re.sub(r"[\n\r]", " ", text).strip()[:40] or old
+            if old in u["chats"] and name not in u["chats"]:
+                u["chats"][name]=u["chats"].pop(old)
+                if u["active_chat"]==old: u["active_chat"]=name
+                if old in u.get("pinned_chats",[]): u["pinned_chats"]=[name if x==old else x for x in u["pinned_chats"]]
+                u["pending_action"]=None; save_db(); send_message(chat_id,f"✏️ Чат переименован в «{name}».",main_keyboard(user_id=user_id))
+            else:
+                u["pending_action"]=None; save_db(); send_message(chat_id,"❌ Такое название уже занято.",main_keyboard(user_id=user_id))
+            return
     caption = (msg.get("caption") or "").strip()
 
     # Global admin rules are enforced server-side and apply to every user.
@@ -1323,13 +1531,14 @@ def process_message(msg):
     if text.startswith("/models"):
         send_message(chat_id, "🧠 Доступные модели:", model_keyboard(u))
         return
-    if text == "🤖 Авто":
-        u["model"] = "auto"
+    if text in ("🤖 Чат", "🤖 Авто"):
+        u["model"] = "auto" if text == "🤖 Авто" else u.get("model", "auto")
+        u["pending_action"] = None
         save_db()
-        send_message(chat_id, "🤖 Auto включён. Модель и способ обработки выбираются автоматически.", main_keyboard())
+        send_message(chat_id, "🤖 Режим чата включён.\nОтправь сообщение.", main_keyboard(user_id=user_id))
         return
-    if text == "🧠 Модель":
-        send_message(chat_id, "🧠 Выбери модель:", model_keyboard(u))
+    if text in ("🧠 Модели", "🧠 Модель"):
+        send_message(chat_id, "🧠 Выбор модели:", model_keyboard(u))
         return
     if text == "📊 Статистика":
         show_stats(chat_id, u)
@@ -1341,19 +1550,31 @@ def process_message(msg):
         show_chats(chat_id, u)
         return
     if text == "🆕 Новый чат":
-        name = new_chat(u)
-        save_db()
-        send_message(chat_id, f"🆕 Создан чат «{name}».", main_keyboard())
+        u["pending_action"] = {"type": "chat_name"}; save_db()
+        send_message(chat_id, "💬 Как назвать новый чат?", main_keyboard(user_id=user_id))
+        return
+    if text == "⭐ Избранное":
+        show_favorites(chat_id, u)
+        return
+    if text == "🎨 Генерация":
+        send_message(chat_id, "🎨 Media Studio\n\nЧто создать?", media_keyboard())
+        return
+    if text == "🔑 Лицензия":
+        show_license(chat_id, user_id)
+        return
+    if text == "👑 Админ":
+        if is_admin(user_id): send_message(chat_id, "👑 Панель администратора", admin_keyboard())
+        else: send_message(chat_id, "⛔ Нет доступа.", main_keyboard(user_id=user_id))
         return
     if text == "🧹 Очистить":
         get_chat(u)["history"] = []
         get_chat(u)["last_prompt"] = None
         get_chat(u)["last_request"] = None
         save_db()
-        send_message(chat_id, "🧹 Текущий чат очищен.", main_keyboard())
+        send_message(chat_id, "🧹 Текущий чат очищен.", main_keyboard(user_id=user_id))
         return
     if text == "⚙️ Настройки":
-        send_message(chat_id, "⚙️ Стиль ответа:", settings_keyboard(u["style"]))
+        show_settings(chat_id, u)
         return
 
     if "photo" in msg:
@@ -1362,13 +1583,11 @@ def process_message(msg):
             data = tg_file(photo["file_id"])
             if len(data) > MAX_IMAGE_BYTES:
                 raise RuntimeError("Изображение слишком большое.")
-            handle_ai_request(
-                chat_id,
-                u,
+            start_ai_request(
+                chat_id, user_id, u,
                 caption or "Что изображено на этом фото? Проанализируй изображение.",
                 image={"data": data, "mime": "image/jpeg"},
                 media_ref={"file_id": photo["file_id"]},
-                user_id=user_id,
             )
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось обработать изображение: {e}", main_keyboard())
@@ -1379,21 +1598,19 @@ def process_message(msg):
         try:
             data = tg_file(doc["file_id"])
             file_text = read_text_file(doc.get("file_name", "file.txt"), data)
-            handle_ai_request(
-                chat_id,
-                u,
+            start_ai_request(
+                chat_id, user_id, u,
                 caption or "Проанализируй этот файл и объясни его содержимое.",
                 file_text=file_text,
                 file_name=doc.get("file_name", "file.txt"),
                 media_ref={"file_id": doc["file_id"]},
-                user_id=user_id,
             )
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось обработать файл: {e}", main_keyboard())
         return
 
     if text:
-        handle_ai_request(chat_id, u, text, user_id=user_id)
+        start_ai_request(chat_id, user_id, u, text)
 
 
 def process_callback(q):
@@ -1408,7 +1625,7 @@ def process_callback(q):
     if data == "back":
         answer_callback(q["id"])
         tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": "🤖 Главное меню"})
-        send_message(chat_id, "Готов.", main_keyboard())
+        send_message(chat_id, "Готов.", main_keyboard(user_id=user_id))
         return
 
     if data == "memory_clear":
@@ -1449,20 +1666,119 @@ def process_callback(q):
         return
 
     if data == "new_chat":
-        name = new_chat(u)
-        save_db()
-        answer_callback(q["id"], "Новый чат")
-        tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": f"🆕 Создан чат «{name}»."})
-        return
+        u["pending_action"]={"type":"chat_name"}; save_db(); answer_callback(q["id"], "Введите название"); tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": "💬 Как назвать новый чат?"}); return
 
-    if data.startswith("chat:"):
-        name = data.split(":", 1)[1]
+    if data.startswith("chat:open:"):
+        name = data.split(":", 2)[2]
         if name in u["chats"]:
             u["active_chat"] = name
             save_db()
             answer_callback(q["id"], "Чат выбран")
-            tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": f"💬 Активен чат «{name}»."})
+            edit_message(chat_id, msg.get("message_id"), f"💬 Активен чат «{name}».")
+        else:
+            answer_callback(q["id"], "Чат не найден")
         return
+
+    if data.startswith("chat:rename:"):
+        name = data.split(":", 2)[2]
+        if name in u["chats"]:
+            u["pending_action"] = {"type": "rename_chat", "old": name}
+            save_db()
+            answer_callback(q["id"], "Введите новое название")
+            send_message(chat_id, "✏️ Отправь новое название чата.", main_keyboard(user_id=user_id))
+        else:
+            answer_callback(q["id"], "Чат не найден")
+        return
+
+    if data.startswith("chat:pin:"):
+        name = data.split(":", 2)[2]
+        if name not in u["chats"]:
+            answer_callback(q["id"], "Чат не найден")
+            return
+        pins = u.setdefault("pinned_chats", [])
+        if name in pins:
+            pins.remove(name)
+            answer_callback(q["id"], "Откреплён")
+        else:
+            pins.append(name)
+            answer_callback(q["id"], "Закреплён")
+        save_db()
+        show_chats(chat_id, u)
+        return
+
+    if data.startswith("chat:delete:"):
+        name = data.split(":", 2)[2]
+        if name == "main":
+            answer_callback(q["id"], "Главный чат нельзя удалить")
+            return
+        if name in u["chats"]:
+            del u["chats"][name]
+            u["pinned_chats"] = [x for x in u.get("pinned_chats", []) if x != name]
+            if u.get("active_chat") == name:
+                u["active_chat"] = "main"
+            save_db()
+            answer_callback(q["id"], "Удалён")
+            show_chats(chat_id, u)
+        else:
+            answer_callback(q["id"], "Чат не найден")
+        return
+
+    if data.startswith("media:"):
+        kind = data.split(":", 1)[1]
+        answer_callback(q["id"], "Выбрано")
+        start_media_prompt(chat_id, u, kind)
+        return
+
+    if data == "favorite:last":
+        last=get_chat(u).get("history",[])
+        answer=next((x.get("content") for x in reversed(last) if x.get("role")=="assistant"),None)
+        if answer: save_favorite(u,answer); answer_callback(q["id"],"Сохранено ⭐")
+        else: answer_callback(q["id"],"Нечего сохранять")
+        return
+
+    if data.startswith("favdel:"):
+        fid = data.split(":", 1)[1]
+        u["favorites"] = [x for x in u.get("favorites", []) if str(x.get("id")) != fid]
+        save_db(); answer_callback(q["id"], "Удалено")
+        tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": "🗑 Ответ удалён из избранного."})
+        return
+
+    if data == "license:activate":
+        u["pending_action"] = {"type": "activate"}; save_db(); answer_callback(q["id"])
+        tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": "🔑 Отправь код лицензии следующим сообщением."})
+        return
+    if data == "license:status":
+        answer_callback(q["id"]); edit_message(chat_id, msg.get("message_id"), "🔑 Лицензия\n\n" + get_license_status(user_id), {"inline_keyboard":[[{"text":"🔑 Активировать код","callback_data":"license:activate"}]]})
+        return
+    if data.startswith("settings:"):
+        action = data.split(":",1)[1]
+        if action == "notifications":
+            u["notifications"] = not u.get("notifications", True); save_db(); answer_callback(q["id"], "Настройка изменена"); show_settings(chat_id,u); return
+        if action == "clear":
+            get_chat(u)["history"]=[]; get_chat(u)["last_prompt"]=None; get_chat(u)["last_request"]=None; save_db(); answer_callback(q["id"], "Чат очищен"); show_settings(chat_id,u); return
+
+    if data.startswith("chat:delete:"):
+        name=data.split(":",2)[2]
+        if name != "main" and name in u["chats"]:
+            del u["chats"][name]
+            if u["active_chat"]==name: u["active_chat"]="main"
+            save_db(); answer_callback(q["id"], "Удалён"); show_chats(chat_id,u)
+        return
+
+    if data.startswith("admin:"):
+        if not is_admin(user_id): answer_callback(q["id"],"Нет доступа"); return
+        action=data.split(":",1)[1]; answer_callback(q["id"])
+        if action=="stats":
+            send_message(chat_id,f"📊 Админ-статистика\n\n👥 Пользователей: {len(db.get('users',{}))}\n💬 Запросов: {db.get('total_requests',0)}\n❌ Ошибок: {db.get('total_errors',0)}\n📜 Правил: {len(db.get('rules',[]))}",admin_keyboard()); return
+        if action=="users":
+            send_message(chat_id,f"👥 Пользователей: {len(db.get('users',{}))}\n\nДля точечной проверки используй /license USER_ID.",admin_keyboard()); return
+        if action=="rules":
+            send_message(chat_id,"📜 Управление правилами\n\n/rules\n/rule_add exact|contains|similar ТЕКСТ ОТВЕТ\n/rule_del ID",admin_keyboard()); return
+        if action=="licenses":
+            send_message(chat_id,"🔑 Лицензии\n\n/newcode DAYS [REQUESTS]\n/give USER_ID DAYS [REQUESTS]\n/license USER_ID\n/revoke USER_ID",admin_keyboard()); return
+        if action=="blocks":
+            send_message(chat_id,"🚫 Блокировки\n\n/block USER_ID\n/unblock USER_ID",admin_keyboard()); return
+        send_message(chat_id,"⚙️ Системные настройки управляются через переменные окружения и конфигурацию проекта.",admin_keyboard()); return
 
     if data == "retry":
         last = get_chat(u).get("last_request")
@@ -1475,36 +1791,38 @@ def process_callback(q):
             kind = last.get("kind")
             if kind == "image" and last.get("file_id"):
                 data_bytes = tg_file(last["file_id"])
-                handle_ai_request(
-                    chat_id,
-                    u,
-                    last.get("text", ""),
+                start_ai_request(
+                    chat_id, user_id, u, last.get("text", ""),
                     image={"data": data_bytes, "mime": "image/jpeg"},
                     media_ref={"file_id": last["file_id"]},
-                    user_id=user_id,
                 )
             elif kind == "file" and last.get("file_id"):
                 data_bytes = tg_file(last["file_id"])
                 name = last.get("file_name") or "file.txt"
                 file_text = read_text_file(name, data_bytes)
-                handle_ai_request(
-                    chat_id,
-                    u,
-                    last.get("text", ""),
+                start_ai_request(
+                    chat_id, user_id, u, last.get("text", ""),
                     file_text=file_text,
                     file_name=name,
                     media_ref={"file_id": last["file_id"]},
-                    user_id=user_id,
                 )
             else:
-                handle_ai_request(chat_id, u, last.get("text", ""), user_id=user_id)
+                start_ai_request(chat_id, user_id, u, last.get("text", ""))
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось повторить запрос: {e}", main_keyboard())
         return
 
 
+def configure_telegram_menu():
+    # Reset the Telegram menu button to the standard commands button.
+    result=tg("setChatMenuButton", {"menu_button": json.dumps({"type":"commands"})})
+    if result is None:
+        print("Telegram menu button configuration skipped/failed")
+
+
 def main():
     load_db()
+    configure_telegram_menu()
     print(f"BulbaMaxAI {BOT_VERSION} started")
     offset = None
     while True:
