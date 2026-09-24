@@ -175,8 +175,9 @@ def _poll_provider(job_id, timeout):
             return data
         if status in {"fail", "failed", "error", "cancelled"}:
             raise RuntimeError(str(data.get("failMsg") or data.get("error") or "Медиа-задача завершилась ошибкой."))
+        # PlusVibe recommends 3–5s polling with exponential backoff up to 30s.
         time.sleep(delay)
-        delay = min(POLL_MAX, delay * 1.6)
+        delay = min(30.0, delay * 1.45)
     raise TimeoutError("Медиа-задача выполняется дольше допустимого времени.")
 
 
@@ -246,6 +247,13 @@ def create_job(kind, prompt, model=None, opts=None, user_id=None):
         raise ValueError("Некорректные параметры медиа.")
 
     selected = choose_model(kind, model)
+    effective_opts = dict(opts or {})
+    if not effective_opts:
+        params = selected.get("params") if isinstance(selected.get("params"), dict) else {}
+        # Keep defaults conservative: only use explicit catalog defaults, never invent values.
+        for key, spec in params.items():
+            if isinstance(spec, dict) and spec.get("default") is not None:
+                effective_opts[key] = spec["default"]
     uid = str(user_id or "")
     reserved = False
     if uid and not is_admin(uid) and os.getenv("LICENSE_REQUIRED", "0").strip() == "1":
@@ -264,7 +272,7 @@ def create_job(kind, prompt, model=None, opts=None, user_id=None):
             "model": selected["id"],
             "prompt": prompt,
             "requested_model": str(model or "auto"),
-            "opts": dict(opts or {}),
+            "opts": effective_opts,
             "status": "queued",
             "created_at": now,
             "updated_at": now,
@@ -272,7 +280,7 @@ def create_job(kind, prompt, model=None, opts=None, user_id=None):
             "license_released": False,
         }
     try:
-        _executor.submit(_run_job, job_id, kind, prompt, model, dict(opts or {}))
+        _executor.submit(_run_job, job_id, kind, prompt, model, effective_opts)
     except Exception:
         _set_job(job_id, status="failed", error="Не удалось запустить медиа-задачу.")
         _release_if_reserved(job_id)
