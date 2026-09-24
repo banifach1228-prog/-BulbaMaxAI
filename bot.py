@@ -32,7 +32,7 @@ import requests
 
 import media_service
 
-BOT_VERSION = "V18.9"
+BOT_VERSION = "V18.10"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_KEY = os.getenv("API_KEY", "").strip()
 
@@ -74,6 +74,7 @@ db = {"users": {}, "total_requests": 0, "total_errors": 0, "rules": [], "version
 DB_LOCK = threading.RLock()
 AI_INFLIGHT_LOCK = threading.RLock()
 AI_INFLIGHT_USERS = set()
+TASK_CANCEL_EVENTS = {}
 AI_WORKERS = max(2, min(8, int(os.getenv("AI_WORKERS", "4"))))
 AI_EXECUTOR = ThreadPoolExecutor(max_workers=AI_WORKERS, thread_name_prefix="bulba-ai")
 MEDIA_RESULT_WORKERS = max(1, min(4, int(os.getenv("MEDIA_RESULT_WORKERS", "2"))))
@@ -246,8 +247,33 @@ def tg(method, data=None, timeout=40, files=None):
         return None
 
 
+def clean_ai_text(text):
+    """Normalize common Markdown artifacts because outgoing bot messages are plain text."""
+    s = str(text or "...").replace("\r\n", "\n").replace("\r", "\n")
+    # Remove fenced-code wrappers but preserve their contents.
+    s = re.sub(r"^\s*```[A-Za-z0-9_+-]*\s*\n?", "", s)
+    s = re.sub(r"\n?\s*```\s*$", "", s)
+    # Headings/bold/strike markers are noise when parse_mode is not used.
+    s = re.sub(r"^\s{0,3}#{1,6}\s+", "", s, flags=re.M)
+    s = s.replace("**", "").replace("__", "").replace("~~", "")
+    # Normalize excessive blank lines for small iPhone screens.
+    s = re.sub(r"\n{4,}", "\n\n", s)
+    return s.strip() or "..."
+
+
+def navigation_alias(text):
+    t = str(text or "").strip().casefold()
+    return {
+        "чат": "🤖 Чат", "agent": "🤖 Агент", "агент": "🤖 Агент",
+        "модели": "🧠 Модели", "модель": "🧠 Модели", "чаты": "💬 Чаты",
+        "генерация": "🎨 Генерация", "память": "💾 Память", "избранное": "⭐ Избранное",
+        "статистика": "📊 Статистика", "настройки": "⚙️ Настройки", "лицензия": "🔑 Лицензия",
+        "отмена": "❌ Отмена", "cancel": "❌ Отмена",
+    }.get(t)
+
+
 def send_message(chat_id, text, keyboard=None):
-    text = str(text or "...")
+    text = clean_ai_text(text)
     chunks = [text[i:i + MAX_REPLY] for i in range(0, len(text), MAX_REPLY)] or ["..."]
     first = None
     for i, chunk in enumerate(chunks):
@@ -786,13 +812,56 @@ def parse_rows_from_text(text):
     return rows
 
 
+def detect_image_edit_intent(text):
+    t = str(text or "").casefold()
+    edit_words = (
+        "измени", "изменить", "замени", "заменить", "убери", "удали",
+        "добавь", "добавить", "перекрась", "перекрасить", "сделай фон",
+        "поменяй фон", "отретушируй", "отретушировать", "отредактируй",
+        "редактируй", "отрисуй", "рестайлинг", "image edit", "edit image",
+        "remove object", "replace object", "change background",
+    )
+    return any(w in t for w in edit_words)
+
+
+def _catalog_supports_image_input(item):
+    blob = json.dumps(item, ensure_ascii=False).casefold()
+    return any(k in blob for k in ("image_url", "image_base64", "image-to-image", "image to image", "input_image"))
+
+
+def choose_image_edit_model(preferred=None):
+    models = media_service.models_for_kind("image")
+    if preferred:
+        exact = next((m for m in models if m.get("id") == preferred), None)
+        if exact and _catalog_supports_image_input(exact):
+            return exact
+    priority = ("flux-kontext", "flux-2", "recraft", "midjourney")
+    for pid in priority:
+        item = next((m for m in models if str(m.get("id", "")).casefold() == pid), None)
+        if item and _catalog_supports_image_input(item):
+            return item
+    candidates = [m for m in models if _catalog_supports_image_input(m)]
+    return candidates[0] if candidates else None
+
+
+def media_opts_for_image_edit(model, image_data, mime):
+    data_url = f"data:{mime};base64,{base64.b64encode(image_data).decode('ascii')}"
+    mid = str(model.get("id") or "").casefold()
+    opts = {"image_base64": data_url}
+    if mid == "flux-2":
+        opts.update({"mode": "Image-to-Image", "aspect_ratio": "1:1", "resolution": "1K"})
+    elif mid == "flux-kontext":
+        opts.update({"aspect_ratio": "1:1", "tier": "pro"})
+    return opts
+
+
 def local_action_plan(text, has_image=False, has_file=False):
     """Deterministic zero-extra-token router. It never calls an AI model."""
     t = str(text or "").strip().lower()
     if not has_image and not has_file and extract_math(text) is not None:
         return {"action": "calculator"}
     if has_image:
-        return {"action": "vision"}
+        return {"action": "image_edit" if detect_image_edit_intent(text) else "vision"}
     if has_file:
         return {"action": "analyze_file"}
     if any(x in t for x in ("excel", "xlsx", "таблиц", "таблицу", "таблица для скач", "сделай таблицу")):
@@ -880,7 +949,7 @@ def record_success(u, chat):
 
 
 AGENT_ACTIONS = {
-    "chat", "calculator", "vision", "analyze_file",
+    "chat", "calculator", "vision", "image_edit", "analyze_file",
     "create_pdf", "create_docx", "create_xlsx", "create_csv", "create_chart",
 }
 
@@ -918,7 +987,7 @@ def agent_plan(u, text, image=False, file_text=False, file_name=None):
             "Ты планировщик BulbaMaxAI. Не решай задачу и не придумывай инструменты. "
             "Верни только JSON без markdown в формате: "
             '{"action":"...","steps":["..."],"goal":"..."}. '
-            "action должен быть одним из: chat, calculator, vision, analyze_file, "
+            "action должен быть одним из: chat, calculator, vision, image_edit, analyze_file, "
             "create_pdf, create_docx, create_xlsx, create_csv, create_chart. "
             "steps — максимум 5 коротких шагов. Если задача обычная — chat. "
             "Никаких shell, HTTP, файловых путей, удаления данных или внешних действий."
@@ -950,20 +1019,22 @@ def start_agent_request(chat_id, user_id, u, text, image=None, file_text=None, f
             send_message(chat_id, "⏳ Предыдущая задача ещё выполняется.", main_keyboard(user_id=user_id))
             return False
         AI_INFLIGHT_USERS.add(uid)
+        TASK_CANCEL_EVENTS[uid] = threading.Event()
 
     def worker():
         try:
             handle_agent_request(chat_id, u, text, image=image, file_text=file_text,
-                                 file_name=file_name, media_ref=media_ref, user_id=user_id)
+                                 file_name=file_name, media_ref=media_ref, user_id=user_id, cancel_event=TASK_CANCEL_EVENTS.get(uid))
         finally:
             with AI_INFLIGHT_LOCK:
                 AI_INFLIGHT_USERS.discard(uid)
+                TASK_CANCEL_EVENTS.pop(uid, None)
 
     AI_EXECUTOR.submit(worker)
     return True
 
 
-def handle_agent_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None):
+def handle_agent_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None, cancel_event=None):
     if not allowed_request(u):
         send_message(chat_id, "⏳ Слишком много запросов. Подожди несколько секунд.", main_keyboard(user_id=user_id))
         return
@@ -973,9 +1044,11 @@ def handle_agent_request(chat_id, u, text, image=None, file_text=None, file_name
         send_message(chat_id, "⛔ Лимит лицензии исчерпан или доступ недоступен.", main_keyboard(user_id=user_id))
         return
     completed = False
-    status_msg = send_message(chat_id, "🤖 Агент: планирую задачу…")
+    status_msg = send_message(chat_id, "🤖 Агент: планирую задачу…", {"inline_keyboard":[[{"text":"⏹ Отмена","callback_data":"task:cancel"}]]})
     chat = get_chat(u)
     try:
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("TASK_CANCELLED")
         # Deterministic fast path: don't spend an AI call just to plan arithmetic.
         if not image and not file_text and extract_math(text) is not None:
             plan = {"action": "calculator", "steps": ["Распознать выражение", "Посчитать", "Проверить результат"], "goal": text}
@@ -986,6 +1059,8 @@ def handle_agent_request(chat_id, u, text, image=None, file_text=None, file_name
             edit_message(chat_id, status_msg["message_id"], f"🤖 Агент\n\nПлан:\n{plan_lines}\n\n⏳ Выполняю…")
 
         action = plan["action"]
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("TASK_CANCELLED")
         if action == "calculator" and not image and not file_text:
             calc = extract_math(text)
             if calc is None:
@@ -997,6 +1072,49 @@ def handle_agent_request(chat_id, u, text, image=None, file_text=None, file_name
                 record_success(u, chat); save_db(); completed = True
                 edit_message(chat_id, status_msg["message_id"], answer, answer_keyboard()) if status_msg else send_message(chat_id, answer, answer_keyboard())
                 return
+
+        # Real image editing path: use a media model that explicitly accepts image input.
+        if action == "image_edit" and image:
+            selected_id = u.get("media_models", {}).get("image")
+            selected = choose_image_edit_model(selected_id)
+            if not selected:
+                raise RuntimeError("Сейчас нет доступной модели, которая поддерживает редактирование изображения.")
+            opts = media_opts_for_image_edit(selected, image.get("data", b""), image.get("mime", "image/jpeg"))
+            status_edit = send_message(chat_id, f"🖼 Редактирование запущено.\n\nМодель: {selected.get('name') or selected.get('id')}\n⏳ Обрабатываю…", {"inline_keyboard":[[{"text":"⏹ Отмена","callback_data":"task:cancel"}]]})
+            job_id, _ = media_service.create_job("image", text, model=selected.get("id"), opts=opts, user_id=None)
+            deadline = time.time() + 180
+            result = None
+            while time.time() < deadline:
+                if cancel_event and cancel_event.is_set():
+                    raise RuntimeError("TASK_CANCELLED")
+                result = media_service.job_status(job_id)
+                if result and result.get("status") == "success":
+                    break
+                if result and result.get("status") in ("failed", "fail"):
+                    raise RuntimeError(str(result.get("error") or result.get("failMsg") or "Редактирование не удалось."))
+                time.sleep(3)
+            if not result or result.get("status") != "success":
+                raise RuntimeError("Редактирование заняло слишком много времени. Попробуй ещё раз позже.")
+            claimed = media_service.claim_success(job_id)
+            if not claimed or not claimed.get("urls"):
+                raise RuntimeError("Модель завершила задачу без изображения.")
+            raw, content_type = _download_media_result(claimed["urls"][0], timeout=180)
+            filename = _media_filename("image", content_type)
+            sent = tg("sendPhoto", {"chat_id": chat_id, "caption": "🖼 Готово"}, files={"photo": (filename, raw, content_type)}, timeout=120)
+            if not sent:
+                sent = tg("sendDocument", {"chat_id": chat_id, "caption": "🖼 Готово"}, files={"document": (filename, raw, content_type)}, timeout=120)
+            if not sent:
+                raise RuntimeError("Telegram не принял готовое изображение.")
+            chat = get_chat(u)
+            add_history(u, "user", text)
+            add_history(u, "assistant", "Изображение отредактировано.")
+            chat["last_prompt"] = text
+            chat["last_request"] = {"kind": "image_edit", "text": text}
+            record_success(u, chat)
+            save_db(); completed = True
+            if status_msg:
+                edit_message(chat_id, status_msg["message_id"], "🖼 Изображение готово.", answer_keyboard())
+            return
 
         # The execution layer is intentionally limited to the same safe, local capabilities
         # already supported by the normal request handler. No shell/network/file-deletion tools
@@ -1016,6 +1134,8 @@ def handle_agent_request(chat_id, u, text, image=None, file_text=None, file_name
             execution_prompt += "\nЕсли пользователь явно просил Word, подготовь содержимое для Word."
 
         # Keep the actual payload type intact for vision/files.
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("TASK_CANCELLED")
         if image:
             content = image_content(image.get("data", b""), image.get("mime", "image/jpeg"), execution_prompt)
             messages = [{"role": "system", "content": style_system(u)}] + build_history(u)
@@ -1083,6 +1203,10 @@ def handle_agent_request(chat_id, u, text, image=None, file_text=None, file_name
         else:
             send_message(chat_id, "🤖 Агент\n\n" + result_text, answer_keyboard())
     except Exception as e:
+        if str(e) == "TASK_CANCELLED":
+            if status_msg:
+                edit_message(chat_id, status_msg["message_id"], "⏹ Задача агента отменена.", main_keyboard(user_id=user_id))
+            return
         print("Agent error:", repr(e))
         u["errors"] = int(u.get("errors", 0)) + 1
         db["total_errors"] = int(db.get("total_errors", 0)) + 1
@@ -1112,22 +1236,24 @@ def start_ai_request(chat_id, user_id, u, text, image=None, file_text=None, file
             send_message(chat_id, "⏳ Предыдущий запрос ещё выполняется. Дождись его завершения.", main_keyboard(user_id=user_id))
             return False
         AI_INFLIGHT_USERS.add(uid)
+        TASK_CANCEL_EVENTS[uid] = threading.Event()
 
     def worker():
         try:
             handle_ai_request(
                 chat_id, u, text, image=image, file_text=file_text,
-                file_name=file_name, media_ref=media_ref, user_id=user_id
+                file_name=file_name, media_ref=media_ref, user_id=user_id, cancel_event=TASK_CANCEL_EVENTS.get(uid)
             )
         finally:
             with AI_INFLIGHT_LOCK:
                 AI_INFLIGHT_USERS.discard(uid)
+                TASK_CANCEL_EVENTS.pop(uid, None)
 
     AI_EXECUTOR.submit(worker)
     return True
 
 
-def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None):
+def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None, cancel_event=None):
     if not allowed_request(u):
         send_message(chat_id, "⏳ Слишком много запросов. Подожди несколько секунд.", main_keyboard())
         return
@@ -1144,11 +1270,13 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
         status = "📸 Анализирую изображение…"
     elif file_text:
         status = "📎 Читаю и анализирую файл…"
-    status_msg = send_message(chat_id, status)
+    status_msg = send_message(chat_id, status, {"inline_keyboard":[[{"text":"⏹ Отмена","callback_data":"task:cancel"}]]})
 
     chat = get_chat(u)
 
     try:
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("TASK_CANCELLED")
         # Fast deterministic calculator path.
         calc = extract_math(text)
         if calc is not None and not image and not file_text:
@@ -1170,6 +1298,8 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
 
         plan = local_action_plan(text, has_image=bool(image), has_file=bool(file_text))
         action = plan.get("action", "chat")
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("TASK_CANCELLED")
 
         if action in ("create_xlsx", "create_csv", "create_chart", "create_pdf", "create_docx"):
             stem = re.sub(r"[^A-Za-zА-Яа-я0-9_-]+", "_", text[:35]).strip("_") or "bulbamaxai"
@@ -1305,6 +1435,10 @@ def handle_ai_request(chat_id, u, text, image=None, file_text=None, file_name=No
             send_message(chat_id, answer, answer_keyboard())
 
     except Exception as e:
+        if str(e) == "TASK_CANCELLED":
+            if status_msg:
+                edit_message(chat_id, status_msg["message_id"], "⏹ Запрос отменён.", main_keyboard(user_id=user_id))
+            return
         print("Request error:", repr(e))
         u["errors"] += 1
         db["total_errors"] += 1
@@ -1660,8 +1794,24 @@ def process_message(msg):
     u = get_user(user_id)
 
     text = (msg.get("text") or "").strip()
+    alias = navigation_alias(text)
+    if alias:
+        text = alias
 
+    # Reply-keyboard navigation always has priority over a pending input flow.
+    # Otherwise a button such as "🤖 Чат" can accidentally become the media prompt.
+    navigation_texts = {
+        "🤖 Чат", "🤖 Агент", "🧠 Модели", "🧠 Модель", "💬 Чаты",
+        "🎨 Генерация", "💾 Память", "⭐ Избранное", "📊 Статистика",
+        "⚙️ Настройки", "🔑 Лицензия", "👑 Админ", "🧹 Очистить",
+        "🆕 Новый чат", "🤖 Авто",
+    }
     pending = u.get("pending_action")
+    if text in navigation_texts and pending:
+        u["pending_action"] = None
+        save_db()
+        pending = None
+
     if text and pending and not text.startswith("/"):
         if pending.get("type") == "media_prompt":
             start_media_job(chat_id, user_id, u, pending.get("kind"), text, pending.get("model"))
@@ -2019,6 +2169,8 @@ def process_callback(q):
     u = get_user(user_id)
 
     if data == "back":
+        u["pending_action"] = None
+        save_db()
         answer_callback(q["id"])
         tg("editMessageText", {"chat_id": chat_id, "message_id": msg.get("message_id"), "text": "🤖 Главное меню"})
         send_message(chat_id, "Готов.", main_keyboard(user_id=user_id))
@@ -2120,8 +2272,20 @@ def process_callback(q):
         return
 
     if data == "media:menu":
+        u["pending_action"] = None
+        save_db()
         answer_callback(q["id"])
         edit_message(chat_id, msg.get("message_id"), "🎨 Генерация", media_keyboard())
+        return
+
+    if data == "task:cancel":
+        ev = TASK_CANCEL_EVENTS.get(str(user_id))
+        if ev:
+            ev.set()
+            answer_callback(q["id"], "Остановка запрошена")
+            edit_message(chat_id, msg.get("message_id"), "⏹ Останавливаю текущую задачу…")
+        else:
+            answer_callback(q["id"], "Активной задачи нет")
         return
 
     if data == "noop":
@@ -2129,6 +2293,8 @@ def process_callback(q):
         return
 
     if data.startswith("media:choose:"):
+        u["pending_action"] = None
+        save_db()
         kind = data.split(":", 2)[2]
         answer_callback(q["id"])
         show_media_models(chat_id, u, kind, msg.get("message_id"), 0)
@@ -2141,12 +2307,16 @@ def process_callback(q):
         return
 
     if data.startswith("mmdlpage:"):
+        u["pending_action"] = None
+        save_db()
         _, kind, page = data.split(":", 2)
         answer_callback(q["id"])
         show_media_models(chat_id, u, kind, msg.get("message_id"), int(page))
         return
 
     if data.startswith("mmdlrefresh:"):
+        u["pending_action"] = None
+        save_db()
         kind = data.split(":", 1)[1]
         media_service.get_catalog(force=True)
         answer_callback(q["id"], "Список обновлён")
