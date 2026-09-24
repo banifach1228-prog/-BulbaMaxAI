@@ -8,6 +8,8 @@ import io
 import csv
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
+import tempfile
 import secrets
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -30,7 +32,7 @@ import requests
 
 import media_service
 
-BOT_VERSION = "V18.5.1"
+BOT_VERSION = "V18.9"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_KEY = os.getenv("API_KEY", "").strip()
 
@@ -72,6 +74,10 @@ db = {"users": {}, "total_requests": 0, "total_errors": 0, "rules": [], "version
 DB_LOCK = threading.RLock()
 AI_INFLIGHT_LOCK = threading.RLock()
 AI_INFLIGHT_USERS = set()
+AI_WORKERS = max(2, min(8, int(os.getenv("AI_WORKERS", "4"))))
+AI_EXECUTOR = ThreadPoolExecutor(max_workers=AI_WORKERS, thread_name_prefix="bulba-ai")
+MEDIA_RESULT_WORKERS = max(1, min(4, int(os.getenv("MEDIA_RESULT_WORKERS", "2"))))
+MEDIA_RESULT_EXECUTOR = ThreadPoolExecutor(max_workers=MEDIA_RESULT_WORKERS, thread_name_prefix="bulba-media-result")
 
 
 def load_db():
@@ -162,6 +168,8 @@ def default_user():
         "favorites": [],
         "pending_action": None,
         "notifications": True,
+        "media_models": {},
+        "agent_mode": False,
     }
 
 
@@ -184,6 +192,10 @@ def get_user(uid):
     u.setdefault("pinned_chats", [])
     u.setdefault("favorites", [])
     u.setdefault("pending_action", None)
+    u.setdefault("media_models", {})
+    u.setdefault("agent_mode", False)
+    if not isinstance(u.get("media_models"), dict):
+        u["media_models"] = {}
     u.setdefault("notifications", True)
     if not u["chats"]:
         u["chats"]["main"] = default_chat()
@@ -271,8 +283,9 @@ def answer_callback(callback_id, text=None):
 
 def main_keyboard(user_id=None):
     rows = [
-        [{"text": "🤖 Чат"}, {"text": "🧠 Модели"}],
-        [{"text": "💬 Чаты"}, {"text": "🎨 Генерация"}],
+        [{"text": "🤖 Чат"}, {"text": "🤖 Агент"}],
+        [{"text": "🧠 Модели"}, {"text": "💬 Чаты"}],
+        [{"text": "🎨 Генерация"}],
         [{"text": "💾 Память"}, {"text": "⭐ Избранное"}],
         [{"text": "📊 Статистика"}, {"text": "⚙️ Настройки"}],
     ]
@@ -866,6 +879,231 @@ def record_success(u, chat):
     db["total_requests"] = int(db.get("total_requests") or 0) + 1
 
 
+AGENT_ACTIONS = {
+    "chat", "calculator", "vision", "analyze_file",
+    "create_pdf", "create_docx", "create_xlsx", "create_csv", "create_chart",
+}
+
+
+def _extract_json_object(text):
+    """Best-effort extraction of one JSON object from a model response."""
+    raw = str(text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+        raw = re.sub(r"\s*```$", "", raw)
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", raw, flags=re.S)
+    if not match:
+        return None
+    try:
+        obj = json.loads(match.group(0))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def agent_plan(u, text, image=False, file_text=False, file_name=None):
+    """Create a small validated plan. The planner cannot execute tools or actions itself."""
+    context = []
+    if image:
+        context.append("В запросе есть изображение.")
+    if file_text:
+        context.append(f"В запросе есть файл: {file_name or 'файл'}.")
+    planner_messages = [
+        {"role": "system", "content": (
+            "Ты планировщик BulbaMaxAI. Не решай задачу и не придумывай инструменты. "
+            "Верни только JSON без markdown в формате: "
+            '{"action":"...","steps":["..."],"goal":"..."}. '
+            "action должен быть одним из: chat, calculator, vision, analyze_file, "
+            "create_pdf, create_docx, create_xlsx, create_csv, create_chart. "
+            "steps — максимум 5 коротких шагов. Если задача обычная — chat. "
+            "Никаких shell, HTTP, файловых путей, удаления данных или внешних действий."
+        )},
+        {"role": "user", "content": "\n".join(context + [f"Задача пользователя: {text}"])},
+    ]
+    answer, error = ai_chat(u, planner_messages, vision=False)
+    obj = _extract_json_object(answer) if answer else None
+    if not obj:
+        return {"action": "chat", "steps": ["Понять задачу", "Дать готовый результат"], "goal": text, "planner_error": error}
+    action = str(obj.get("action") or "chat").strip().lower()
+    if action not in AGENT_ACTIONS:
+        action = "chat"
+    steps = obj.get("steps")
+    if not isinstance(steps, list):
+        steps = []
+    steps = [str(x).strip()[:300] for x in steps if str(x).strip()][:5]
+    if not steps:
+        steps = ["Понять задачу", "Выполнить её", "Проверить результат"]
+    goal = str(obj.get("goal") or text).strip()[:1000]
+    return {"action": action, "steps": steps, "goal": goal}
+
+
+def start_agent_request(chat_id, user_id, u, text, image=None, file_text=None, file_name=None, media_ref=None):
+    """Run agent mode outside polling. One user request reserves one license unit."""
+    uid = str(user_id)
+    with AI_INFLIGHT_LOCK:
+        if uid in AI_INFLIGHT_USERS:
+            send_message(chat_id, "⏳ Предыдущая задача ещё выполняется.", main_keyboard(user_id=user_id))
+            return False
+        AI_INFLIGHT_USERS.add(uid)
+
+    def worker():
+        try:
+            handle_agent_request(chat_id, u, text, image=image, file_text=file_text,
+                                 file_name=file_name, media_ref=media_ref, user_id=user_id)
+        finally:
+            with AI_INFLIGHT_LOCK:
+                AI_INFLIGHT_USERS.discard(uid)
+
+    AI_EXECUTOR.submit(worker)
+    return True
+
+
+def handle_agent_request(chat_id, u, text, image=None, file_text=None, file_name=None, media_ref=None, user_id=None):
+    if not allowed_request(u):
+        send_message(chat_id, "⏳ Слишком много запросов. Подожди несколько секунд.", main_keyboard(user_id=user_id))
+        return
+    license_user_id = str(user_id if user_id is not None else chat_id)
+    reserved = reserve_license_request(license_user_id)
+    if not reserved:
+        send_message(chat_id, "⛔ Лимит лицензии исчерпан или доступ недоступен.", main_keyboard(user_id=user_id))
+        return
+    completed = False
+    status_msg = send_message(chat_id, "🤖 Агент: планирую задачу…")
+    chat = get_chat(u)
+    try:
+        # Deterministic fast path: don't spend an AI call just to plan arithmetic.
+        if not image and not file_text and extract_math(text) is not None:
+            plan = {"action": "calculator", "steps": ["Распознать выражение", "Посчитать", "Проверить результат"], "goal": text}
+        else:
+            plan = agent_plan(u, text, image=bool(image), file_text=bool(file_text), file_name=file_name)
+        plan_lines = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan["steps"]))
+        if status_msg:
+            edit_message(chat_id, status_msg["message_id"], f"🤖 Агент\n\nПлан:\n{plan_lines}\n\n⏳ Выполняю…")
+
+        action = plan["action"]
+        if action == "calculator" and not image and not file_text:
+            calc = extract_math(text)
+            if calc is None:
+                action = "chat"
+            else:
+                answer = f"🧮 Ответ: {calc:g}" if isinstance(calc, float) and calc.is_integer() else f"🧮 Ответ: {calc}"
+                add_history(u, "user", text); add_history(u, "assistant", answer)
+                chat["last_prompt"] = text; chat["last_request"] = {"kind": "text", "text": text}
+                record_success(u, chat); save_db(); completed = True
+                edit_message(chat_id, status_msg["message_id"], answer, answer_keyboard()) if status_msg else send_message(chat_id, answer, answer_keyboard())
+                return
+
+        # The execution layer is intentionally limited to the same safe, local capabilities
+        # already supported by the normal request handler. No shell/network/file-deletion tools
+        # are exposed to the agent planner.
+        execution_prompt = (
+            "Ты BulbaMaxAI в режиме агента. Выполни задачу пользователя по проверенному плану.\n"
+            f"Цель: {plan['goal']}\n"
+            f"План:\n{plan_lines}\n\n"
+            "Не утверждай, что сделал действие, если фактически его не сделал. "
+            "Если данных недостаточно — скажи, что именно нужно. "
+            "Проверь итог перед ответом.\n\n"
+            f"Задача пользователя: {text}"
+        )
+        if action == "create_pdf" and "pdf" not in text.lower():
+            execution_prompt += "\nЕсли пользователь явно просил PDF, подготовь содержимое для PDF."
+        if action == "create_docx" and "docx" not in text.lower() and "word" not in text.lower():
+            execution_prompt += "\nЕсли пользователь явно просил Word, подготовь содержимое для Word."
+
+        # Keep the actual payload type intact for vision/files.
+        if image:
+            content = image_content(image.get("data", b""), image.get("mime", "image/jpeg"), execution_prompt)
+            messages = [{"role": "system", "content": style_system(u)}] + build_history(u)
+            messages.append({"role": "user", "content": content})
+            answer, error = ai_chat(u, messages, vision=True)
+        else:
+            prompt = execution_prompt
+            if file_text:
+                prompt += f"\n\nФайл: {file_name or 'файл'}\n\nСодержимое:\n{file_text}"
+            messages = [{"role": "system", "content": style_system(u)}] + build_history(u)
+            messages.append({"role": "user", "content": prompt})
+            answer, error = ai_chat(u, messages, vision=False)
+
+        if not answer:
+            raise RuntimeError(error or "Агент не смог получить итоговый ответ.")
+
+        # Execute supported local file actions from the validated plan.
+        result_text = answer
+        if action in ("create_pdf", "create_docx", "create_xlsx", "create_csv", "create_chart"):
+            stem = re.sub(r"[^A-Za-zА-Яа-я0-9_-]+", "_", text[:35]).strip("_") or "bulbamaxai_agent"
+            workdir = Path(tempfile.mkdtemp(prefix="bulbamaxai_agent_"))
+            if action in ("create_xlsx", "create_csv", "create_chart"):
+                table_prompt = (
+                    "Преобразуй результат в таблицу для файла. Верни ТОЛЬКО строки с ячейками, "
+                    "разделёнными символом |, без markdown-таблицы, заголовков и пояснений.\n\n" + answer
+                )
+                table_answer, table_error = ai_chat(u, [{"role":"system","content":"Ты форматировщик табличных данных."},{"role":"user","content":table_prompt}], vision=False)
+                rows = parse_rows_from_text(table_answer or "")
+                if len(rows) < 2:
+                    raise RuntimeError(table_error or "Агент не смог подготовить минимум две строки для таблицы.")
+                clean_rows = [[str(x).strip() for x in row] for row in rows if row]
+                if len(clean_rows) < 2:
+                    raise RuntimeError("Недостаточно данных для файла.")
+                if action == "create_xlsx":
+                    path = workdir / f"{stem}.xlsx"; make_xlsx(clean_rows, path); sent = send_document(chat_id, path, "🤖 Агент создал Excel-файл")
+                elif action == "create_csv":
+                    path = workdir / f"{stem}.csv"; make_csv(clean_rows, path); sent = send_document(chat_id, path, "🤖 Агент создал CSV-файл")
+                else:
+                    path = workdir / f"{stem}.png"; make_chart(clean_rows, path); sent = send_photo(chat_id, path, "🤖 Агент создал график")
+                if not sent:
+                    raise RuntimeError("Telegram не принял созданный файл.")
+                result_text = f"Создан файл: {path.name}"
+            else:
+                path = workdir / f"{stem}{'.pdf' if action == 'create_pdf' else '.docx'}"
+                if action == "create_pdf":
+                    make_pdf(answer, path, "BulbaMaxAI Agent"); caption = "🤖 Агент создал PDF"
+                else:
+                    make_docx(answer, path, "BulbaMaxAI Agent"); caption = "🤖 Агент создал Word-документ"
+                sent = send_document(chat_id, path, caption)
+                if not sent:
+                    raise RuntimeError("Telegram не принял созданный документ.")
+                result_text = f"Создан файл: {path.name}"
+
+        # Agent output is a successful interaction. Keep only the user request and final result.
+        add_history(u, "user", text)
+        add_history(u, "assistant", result_text)
+        chat["last_prompt"] = text
+        last_kind = "image" if image else ("file" if file_text else "text")
+        chat["last_request"] = {"kind": last_kind, "text": text,
+                                 "file_id": (media_ref or {}).get("file_id") if media_ref else None,
+                                 "file_name": file_name}
+        record_success(u, chat); save_db(); completed = True
+        if status_msg:
+            edit_message(chat_id, status_msg["message_id"], "🤖 Агент\n\n" + result_text, answer_keyboard())
+        else:
+            send_message(chat_id, "🤖 Агент\n\n" + result_text, answer_keyboard())
+    except Exception as e:
+        print("Agent error:", repr(e))
+        u["errors"] = int(u.get("errors", 0)) + 1
+        db["total_errors"] = int(db.get("total_errors", 0)) + 1
+        save_db()
+        msg = "❌ Агент не смог завершить задачу. Попробуй сформулировать её иначе или отключи режим агента."
+        if status_msg:
+            edit_message(chat_id, status_msg["message_id"], msg, main_keyboard(user_id=user_id))
+        else:
+            send_message(chat_id, msg, main_keyboard(user_id=user_id))
+    finally:
+        if reserved and not completed:
+            release_license_request(license_user_id)
+        if "workdir" in locals():
+            try:
+                for item in workdir.iterdir():
+                    item.unlink(missing_ok=True)
+                workdir.rmdir()
+            except Exception:
+                pass
+
+
 def start_ai_request(chat_id, user_id, u, text, image=None, file_text=None, file_name=None, media_ref=None):
     """Run a potentially long AI/file task outside the Telegram polling loop."""
     uid = str(user_id)
@@ -885,7 +1123,7 @@ def start_ai_request(chat_id, user_id, u, text, image=None, file_text=None, file
             with AI_INFLIGHT_LOCK:
                 AI_INFLIGHT_USERS.discard(uid)
 
-    threading.Thread(target=worker, name=f"bulba-ai-{uid}", daemon=True).start()
+    AI_EXECUTOR.submit(worker)
     return True
 
 
@@ -1144,6 +1382,125 @@ def media_keyboard():
     ]}
 
 
+def _media_model_title(item, selected_id=None):
+    name = str(item.get("name") or item.get("id") or "Модель")
+    mid = str(item.get("id") or "")
+    price = item.get("fromRub")
+    price_text = f" · от {price:g} ₽" if price is not None and not item.get("priceUnavailable") else ""
+    mark = "✅ " if selected_id == mid else ""
+    return (mark + name + price_text)[:55]
+
+
+def media_model_keyboard(u, kind, page=0):
+    models = media_service.models_for_kind(kind)
+    selected_id = u.get("media_models", {}).get(kind) or "auto"
+    per_page = 8
+    pages = max(1, (len(models) + per_page - 1) // per_page)
+    page = max(0, min(int(page or 0), pages - 1))
+    begin = page * per_page
+    visible = models[begin:begin + per_page]
+
+    rows = [[{
+        "text": "🤖 Авто" + (" · выбрано" if selected_id == "auto" else ""),
+        "callback_data": f"mmdl:{kind}:auto:{page}",
+    }]]
+    for i, item in enumerate(visible):
+        absolute = begin + i
+        rows.append([{
+            "text": _media_model_title(item, selected_id),
+            "callback_data": f"mmdl:{kind}:{absolute}:{page}",
+        }])
+
+    nav = []
+    if page > 0:
+        nav.append({"text": "◀️", "callback_data": f"mmdlpage:{kind}:{page - 1}"})
+    nav.append({"text": f"{page + 1}/{pages}", "callback_data": "noop"})
+    if page + 1 < pages:
+        nav.append({"text": "▶️", "callback_data": f"mmdlpage:{kind}:{page + 1}"})
+    if nav:
+        rows.append(nav)
+    rows.append([{
+        "text": "🔄 Обновить список",
+        "callback_data": f"mmdlrefresh:{kind}",
+    }])
+    rows.append([{
+        "text": "⬅️ Назад",
+        "callback_data": "media:menu",
+    }])
+    return {"inline_keyboard": rows}
+
+
+def show_media_models(chat_id, u, kind, message_id=None, page=0):
+    kind = media_service.normalize_kind(kind)
+    if not kind:
+        send_message(chat_id, "❌ Неизвестный тип генерации.", main_keyboard())
+        return
+    models = media_service.models_for_kind(kind)
+    labels = {"image":"🖼 Изображение", "video":"🎬 Видео", "tts":"🔊 Голос", "music":"🎵 Музыка", "3d":"🧊 3D"}
+    if not models:
+        text = f"{labels.get(kind, '🎨 Генерация')}\n\n⚠️ Сейчас доступных моделей нет.\nНажми «Обновить список»."
+        kb = {"inline_keyboard": [[{"text": "🔄 Обновить список", "callback_data": f"mmdlrefresh:{kind}"}], [{"text": "⬅️ Назад", "callback_data": "media:menu"}]]}
+        if message_id:
+            edit_message(chat_id, message_id, text, kb)
+        else:
+            send_message(chat_id, text, kb)
+        return
+
+    selected = u.get("media_models", {}).get(kind) or "auto"
+    selected_item = next((m for m in models if m.get("id") == selected), None)
+    if selected != "auto" and not selected_item:
+        u.setdefault("media_models", {}).pop(kind, None)
+        selected = "auto"
+        save_db()
+    if selected == "auto":
+        selected_text = "🤖 Авто (самая подходящая доступная модель)"
+    else:
+        selected_text = str(selected_item.get("name") or selected)
+
+    pages = max(1, (len(models) + 7) // 8)
+    page = max(0, min(int(page or 0), pages - 1))
+    text = (
+        f"{labels.get(kind, '🎨 Генерация')}\n\n"
+        f"🧠 Выбор модели\n"
+        f"Текущая: {selected_text}\n"
+        f"Доступно моделей: {len(models)}\n\n"
+        "Выбери модель ниже:"
+    )
+    kb = media_model_keyboard(u, kind, page)
+    if message_id:
+        edit_message(chat_id, message_id, text, kb)
+    else:
+        send_message(chat_id, text, kb)
+
+def start_media_prompt(chat_id, user_id, u, kind, model=None):
+    kind = media_service.normalize_kind(kind)
+    user_id = str(user_id)
+    if not media_service.configured():
+        send_message(chat_id, "⚠️ Media Studio сейчас недоступна: PLUSVIBE_API_KEY не настроен.", main_keyboard(user_id=user_id))
+        return
+    models = media_service.models_for_kind(kind)
+    if not models:
+        send_message(chat_id, "⚠️ Для этого типа генерации сейчас нет доступных моделей.", media_keyboard())
+        return
+    chosen = str(model or u.get("media_models", {}).get(kind) or "auto")
+    if chosen != "auto":
+        try:
+            selected = media_service.choose_model(kind, chosen)
+            chosen = selected["id"]
+            u.setdefault("media_models", {})[kind] = chosen
+        except Exception:
+            chosen = "auto"
+            u.setdefault("media_models", {}).pop(kind, None)
+    u["pending_action"] = {"type": "media_prompt", "kind": kind, "model": chosen}
+    save_db()
+    labels = {"image":"🖼 Изображение", "video":"🎬 Видео", "tts":"🔊 Голос", "music":"🎵 Музыка", "3d":"🧊 3D"}
+    model_text = "Авто" if chosen == "auto" else chosen
+    kb = {"inline_keyboard": [
+        [{"text": f"🧠 Модель: {model_text}"[:55], "callback_data": f"media:choose:{kind}"}],
+        [{"text": "❌ Отмена", "callback_data": "media:menu"}],
+    ]}
+    send_message(chat_id, f"{labels.get(kind, '🎨 Генерация')}\n\nМодель: {model_text}\n\nНапиши описание того, что нужно создать.", kb)
+
 def admin_keyboard():
     return {"inline_keyboard": [
         [{"text": "👥 Пользователи", "callback_data": "admin:users"}],
@@ -1181,7 +1538,7 @@ def show_settings(chat_id, u):
     send_message(chat_id, "⚙️ Настройки\n\nВыбери нужный параметр:", kb)
 
 
-def show_favorites(chat_id, u):
+def show_favorites(chat_id, u, user_id=None):
     favs = u.get("favorites", [])
     if not favs:
         send_message(chat_id, "⭐ Избранное\n\nПока ничего не сохранено.", main_keyboard(user_id=user_id))
@@ -1200,22 +1557,6 @@ def save_favorite(u, text):
     return fid
 
 
-def start_media_prompt(chat_id, u, kind):
-    user_id = str(u.get("_user_id") or "")
-    if not user_id:
-        # Runtime identity is normally supplied by process_message; keep this helper safe.
-        user_id = str(next((uid for uid, item in db.get("users", {}).items() if item is u), ""))
-    if not media_service.configured():
-        send_message(chat_id, "⚠️ Media Studio сейчас недоступна: PLUSVIBE_API_KEY не настроен.", main_keyboard(user_id=user_id))
-        return
-    models = media_service.models_for_kind(kind)
-    if not models:
-        send_message(chat_id, "⚠️ Для этого типа генерации сейчас нет доступных моделей.", main_keyboard(user_id=user_id))
-        return
-    u["pending_action"] = {"type": "media_prompt", "kind": kind}
-    save_db()
-    labels = {"image":"🖼 Изображение", "video":"🎬 Видео", "tts":"🔊 Голос", "music":"🎵 Музыка", "3d":"🧊 3D"}
-    send_message(chat_id, f"{labels.get(kind, '🎨 Генерация')}\n\nНапиши описание того, что нужно создать.", main_keyboard(user_id=user_id))
 
 
 def _download_media_result(url, timeout=180):
@@ -1298,13 +1639,13 @@ def run_media_job(chat_id, user_id, job_id, kind):
     send_message(chat_id, "⏳ Генерация ещё выполняется. Проверь результат позже или создай новый запрос.", main_keyboard(user_id=user_id))
 
 
-def start_media_job(chat_id, user_id, u, kind, prompt):
+def start_media_job(chat_id, user_id, u, kind, prompt, model=None):
     try:
-        job_id, selected = media_service.create_job(kind, prompt, user_id=user_id)
+        job_id, selected = media_service.create_job(kind, prompt, model=(None if model in (None, "auto") else model), user_id=user_id)
         u["pending_action"] = None
         save_db()
         send_message(chat_id, f"🎨 Генерация запущена.\n\nМодель: {selected['id']}\n⏳ Статус: выполняется…")
-        threading.Thread(target=run_media_job, args=(chat_id, user_id, job_id, kind), daemon=True).start()
+        MEDIA_RESULT_EXECUTOR.submit(run_media_job, chat_id, user_id, job_id, kind)
     except PermissionError as e:
         u["pending_action"] = None; save_db(); send_message(chat_id, f"⛔ {e}", main_keyboard(user_id=user_id))
     except Exception as e:
@@ -1323,7 +1664,7 @@ def process_message(msg):
     pending = u.get("pending_action")
     if text and pending and not text.startswith("/"):
         if pending.get("type") == "media_prompt":
-            start_media_job(chat_id, user_id, u, pending.get("kind"), text)
+            start_media_job(chat_id, user_id, u, pending.get("kind"), text, pending.get("model"))
             return
         if pending.get("type") == "remember":
             u["memory"][str(int(time.time()))] = text[:1000]
@@ -1533,6 +1874,13 @@ def process_message(msg):
     if text.startswith("/help"):
         send_message(chat_id, "Просто отправляй текст, фото или поддерживаемый файл. Агент сам определит задачу.\n\nКоманды: /new /clear /stats /memory /remember /forget /models", main_keyboard())
         return
+    if text.startswith("/agent"):
+        u["agent_mode"] = not bool(u.get("agent_mode", False))
+        u["pending_action"] = None
+        save_db()
+        state = "ВКЛ" if u["agent_mode"] else "ВЫКЛ"
+        send_message(chat_id, f"🤖 Режим агента: {state}.\n\n" + ("Отправь задачу — агент составит план и выполнит её." if u["agent_mode"] else "Обычный режим чата включён."), main_keyboard(user_id=user_id))
+        return
     if text.startswith("/new"):
         name = new_chat(u)
         save_db()
@@ -1578,6 +1926,13 @@ def process_message(msg):
         save_db()
         send_message(chat_id, "🤖 Режим чата включён.\nОтправь сообщение.", main_keyboard(user_id=user_id))
         return
+    if text == "🤖 Агент":
+        u["agent_mode"] = not bool(u.get("agent_mode", False))
+        u["pending_action"] = None
+        save_db()
+        state = "ВКЛ" if u["agent_mode"] else "ВЫКЛ"
+        send_message(chat_id, f"🤖 Режим агента: {state}.\n\n" + ("Теперь отправляй сложные задачи — агент сначала составит план." if u["agent_mode"] else "Обычный режим чата включён."), main_keyboard(user_id=user_id))
+        return
     if text in ("🧠 Модели", "🧠 Модель"):
         send_message(chat_id, "🧠 Выбор модели:", model_keyboard(u))
         return
@@ -1595,7 +1950,7 @@ def process_message(msg):
         send_message(chat_id, "💬 Как назвать новый чат?", main_keyboard(user_id=user_id))
         return
     if text == "⭐ Избранное":
-        show_favorites(chat_id, u)
+        show_favorites(chat_id, u, user_id)
         return
     if text == "🎨 Генерация":
         send_message(chat_id, "🎨 Media Studio\n\nЧто создать?", media_keyboard())
@@ -1624,12 +1979,11 @@ def process_message(msg):
             data = tg_file(photo["file_id"])
             if len(data) > MAX_IMAGE_BYTES:
                 raise RuntimeError("Изображение слишком большое.")
-            start_ai_request(
-                chat_id, user_id, u,
-                caption or "Что изображено на этом фото? Проанализируй изображение.",
-                image={"data": data, "mime": "image/jpeg"},
-                media_ref={"file_id": photo["file_id"]},
-            )
+            request_text = caption or "Что изображено на этом фото? Проанализируй изображение."
+            if u.get("agent_mode", False):
+                start_agent_request(chat_id, user_id, u, request_text, image={"data": data, "mime": "image/jpeg"}, media_ref={"file_id": photo["file_id"]})
+            else:
+                start_ai_request(chat_id, user_id, u, request_text, image={"data": data, "mime": "image/jpeg"}, media_ref={"file_id": photo["file_id"]})
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось обработать изображение: {e}", main_keyboard())
         return
@@ -1639,19 +1993,20 @@ def process_message(msg):
         try:
             data = tg_file(doc["file_id"])
             file_text = read_text_file(doc.get("file_name", "file.txt"), data)
-            start_ai_request(
-                chat_id, user_id, u,
-                caption or "Проанализируй этот файл и объясни его содержимое.",
-                file_text=file_text,
-                file_name=doc.get("file_name", "file.txt"),
-                media_ref={"file_id": doc["file_id"]},
-            )
+            request_text = caption or "Проанализируй этот файл и объясни его содержимое."
+            if u.get("agent_mode", False):
+                start_agent_request(chat_id, user_id, u, request_text, file_text=file_text, file_name=doc.get("file_name", "file.txt"), media_ref={"file_id": doc["file_id"]})
+            else:
+                start_ai_request(chat_id, user_id, u, request_text, file_text=file_text, file_name=doc.get("file_name", "file.txt"), media_ref={"file_id": doc["file_id"]})
         except Exception as e:
             send_message(chat_id, f"❌ Не удалось обработать файл: {e}", main_keyboard())
         return
 
     if text:
-        start_ai_request(chat_id, user_id, u, text)
+        if u.get("agent_mode", False):
+            start_agent_request(chat_id, user_id, u, text)
+        else:
+            start_ai_request(chat_id, user_id, u, text)
 
 
 def process_callback(q):
@@ -1764,10 +2119,69 @@ def process_callback(q):
             answer_callback(q["id"], "Чат не найден")
         return
 
+    if data == "media:menu":
+        answer_callback(q["id"])
+        edit_message(chat_id, msg.get("message_id"), "🎨 Генерация", media_keyboard())
+        return
+
+    if data == "noop":
+        answer_callback(q["id"])
+        return
+
+    if data.startswith("media:choose:"):
+        kind = data.split(":", 2)[2]
+        answer_callback(q["id"])
+        show_media_models(chat_id, u, kind, msg.get("message_id"), 0)
+        return
+
     if data.startswith("media:"):
         kind = data.split(":", 1)[1]
-        answer_callback(q["id"], "Выбрано")
-        start_media_prompt(chat_id, u, kind)
+        answer_callback(q["id"], "Выбор модели")
+        show_media_models(chat_id, u, kind, msg.get("message_id"), 0)
+        return
+
+    if data.startswith("mmdlpage:"):
+        _, kind, page = data.split(":", 2)
+        answer_callback(q["id"])
+        show_media_models(chat_id, u, kind, msg.get("message_id"), int(page))
+        return
+
+    if data.startswith("mmdlrefresh:"):
+        kind = data.split(":", 1)[1]
+        media_service.get_catalog(force=True)
+        answer_callback(q["id"], "Список обновлён")
+        show_media_models(chat_id, u, kind, msg.get("message_id"), 0)
+        return
+
+    if data.startswith("mmdl:"):
+        parts = data.split(":")
+        if len(parts) not in (3, 4):
+            answer_callback(q["id"], "Некорректная кнопка")
+            return
+        _, kind, value = parts[:3]
+        page = int(parts[3]) if len(parts) == 4 and parts[3].isdigit() else 0
+        kind = media_service.normalize_kind(kind)
+        if not kind:
+            answer_callback(q["id"], "Неизвестный тип")
+            return
+        if value == "auto":
+            u.setdefault("media_models", {}).pop(kind, None)
+            selected = "auto"
+        else:
+            try:
+                models = media_service.models_for_kind(kind)
+                idx = int(value)
+                if idx < 0 or idx >= len(models):
+                    raise ValueError
+                selected = models[idx]["id"]
+                media_service.choose_model(kind, selected)
+                u.setdefault("media_models", {})[kind] = selected
+            except Exception:
+                answer_callback(q["id"], "Модель уже недоступна. Обнови список.")
+                return
+        save_db()
+        answer_callback(q["id"], "Модель выбрана")
+        start_media_prompt(chat_id, user_id, u, kind, None if selected == "auto" else selected)
         return
 
     if data == "favorite:last":
