@@ -16,7 +16,7 @@ def parse_intent(text: str) -> Intent | None:
     low = s.casefold()
     if low in {"/wallet", "кошелек", "кошелёк", "💰 кошелек"}:
         return Intent("wallet")
-    if low in {"/balance", "баланс", "💰 баланс"}:
+    if low in {"/balance", "баланс", "💰 баланс", "💵 баланс"}:
         return Intent("balance")
     if low.startswith("/send "):
         p=s.split()
