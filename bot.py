@@ -29,10 +29,11 @@ from licenses import (
 )
 
 import requests
+from bulbax.telegram_bridge import handle_text as bulbax_handle_text
 
 import media_service
 
-BOT_VERSION = "V18.10"
+BOT_VERSION = "V18.11"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_KEY = os.getenv("API_KEY", "").strip()
 
@@ -266,6 +267,7 @@ def navigation_alias(text):
     return {
         "чат": "🤖 Чат", "agent": "🤖 Агент", "агент": "🤖 Агент",
         "модели": "🧠 Модели", "модель": "🧠 Модели", "чаты": "💬 Чаты",
+        "кошелек": "💰 Кошелёк", "кошелёк": "💰 Кошелёк", "баланс": "💵 Баланс", "биржа": "📈 Биржа",
         "генерация": "🎨 Генерация", "память": "💾 Память", "избранное": "⭐ Избранное",
         "статистика": "📊 Статистика", "настройки": "⚙️ Настройки", "лицензия": "🔑 Лицензия",
         "отмена": "❌ Отмена", "cancel": "❌ Отмена",
@@ -311,6 +313,8 @@ def main_keyboard(user_id=None):
     rows = [
         [{"text": "🤖 Чат"}, {"text": "🤖 Агент"}],
         [{"text": "🧠 Модели"}, {"text": "💬 Чаты"}],
+        [{"text": "💰 Кошелёк"}, {"text": "💵 Баланс"}],
+        [{"text": "📈 Биржа"}],
         [{"text": "🎨 Генерация"}],
         [{"text": "💾 Память"}, {"text": "⭐ Избранное"}],
         [{"text": "📊 Статистика"}, {"text": "⚙️ Настройки"}],
@@ -1606,6 +1610,7 @@ def show_media_models(chat_id, u, kind, message_id=None, page=0):
     else:
         send_message(chat_id, text, kb)
 
+
 def start_media_prompt(chat_id, user_id, u, kind, model=None):
     kind = media_service.normalize_kind(kind)
     user_id = str(user_id)
@@ -1845,6 +1850,23 @@ def process_message(msg):
             else:
                 u["pending_action"]=None; save_db(); send_message(chat_id,"❌ Такое название уже занято.",main_keyboard(user_id=user_id))
             return
+
+    # BulbaX handles its own commands before normal AI chat.
+    # Ordinary messages return None and continue through the existing bot flow.
+    if text:
+        try:
+            bulbax_response = bulbax_handle_text(user_id, text)
+        except Exception as exc:
+            print("BulbaX bridge error:", repr(exc))
+            bulbax_response = "❌ Ошибка BulbaX. Подробности записаны в лог."
+        if bulbax_response is not None:
+            send_message(
+                chat_id,
+                bulbax_response,
+                main_keyboard(user_id=user_id),
+            )
+            return
+
     caption = (msg.get("caption") or "").strip()
 
     # Global admin rules are enforced server-side and apply to every user.
